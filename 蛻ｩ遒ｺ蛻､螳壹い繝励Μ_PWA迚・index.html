@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>利確判定アプリ</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="利確判定">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;background:#f5f5f7;margin:0;color:#111}
+.wrap{max-width:520px;margin:auto;padding:20px}
+h1{font-size:25px;margin:8px 0 18px}
+.card{background:white;border-radius:16px;padding:18px;margin-bottom:14px;box-shadow:0 2px 10px #0000000d}
+label{display:block;font-weight:600;margin:12px 0 6px}
+input,select,button{width:100%;box-sizing:border-box;padding:13px;border:1px solid #ccc;border-radius:10px;font-size:16px}
+button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
+.secondary{background:#e9e9ee;color:#111}
+.status{font-size:22px;font-weight:800;margin:4px 0 8px}
+.small{font-size:13px;color:#666;line-height:1.5}
+.value{font-size:18px;font-weight:700}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hidden{display:none}
+.ok{background:#eaf8ee;border-radius:12px;padding:14px}
+.warn{background:#fff5dc;border-radius:12px;padding:14px}
+.danger{background:#ffe9e9;border-radius:12px;padding:14px}
+
+.pf-row{display:grid;grid-template-columns:minmax(0,1fr) 112px auto;gap:8px;align-items:center;background:#f7f7f8;border-radius:12px;padding:10px;margin-bottom:8px}
+.pf-row select{min-width:0}.pf-cost{padding:9px !important;font-size:14px !important;text-align:right}.pf-cost-wrap{display:flex;flex-direction:column;gap:3px}.pf-cost-label{font-size:10px;color:#666}.pf-cost-saved{font-size:9px;color:#1a7f37;min-height:11px}
+.pf-row select{padding:9px;font-size:14px}
+.pf-meta{font-size:11px;color:#666}.pf-judge{font-size:13px;font-weight:800}.pf-btn{width:auto;margin:0;padding:8px 10px;background:#e9e9ee;color:#111}
+
+.qj-green{background:#eaf8ee}.qj-yellow{background:#fff5dc}.qj-red{background:#ffe9e9}.qj-blue{background:#eef4ff}
+</style>
+
+<style>
+.risk10{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;font-weight:800;font-size:11px;border:1px solid #d0d7de}
+.risk10 .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.risk-low{color:#1a7f37;background:#dafbe1}.risk-mid{color:#9a6700;background:#fff8c5}
+.risk-high{color:#cf222e;background:#fff1f0}.risk-extreme{color:#a40e26;background:#ffe5e5}
+.adjustProb{font-weight:800;font-size:13px}.factorLine{font-size:11px;line-height:1.35;color:#57606a;margin-top:3px}
+.factorLine b{color:#24292f}.riskCard{padding:10px;border:1px solid #d0d7de;border-radius:10px;margin:8px 0;background:#fff}
+</style>
+
+<style>
+.pfRiskBlock{
+  margin-top:7px;padding:7px 9px;border-radius:9px;
+  background:#f6f8fa;border:1px solid #d0d7de;
+  font-size:11px;line-height:1.45;
+}
+.pfRiskBlock strong{font-size:12px}
+.pfRiskReasons{color:#57606a}
+</style>
+
+<style>
+#pf2colGrid{
+  display:grid !important;
+  grid-template-columns:1fr !important;
+  gap:10px !important;
+  width:100% !important;
+}
+#pf2colGrid > *{
+  width:100% !important;
+  min-width:0 !important;
+  max-width:none !important;
+  box-sizing:border-box !important;
+}
+#pf2colGrid .pfRiskBlock{
+  width:100% !important;
+  box-sizing:border-box !important;
+  font-size:12px !important;
+  line-height:1.45 !important;
+  overflow-wrap:break-word !important;
+}
+.pfTopLine{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px;
+  margin-bottom:3px;
+}
+.pfRiskReasons{font-size:11px !important}
+.profitRiskNotice{margin-top:5px}
+@media(max-width:700px){
+  #pf2colGrid .pfRiskBlock{padding:8px !important}
+  #pf2colGrid .pfRiskBlock strong{font-size:13px !important}
+}
+</style>
+</head>
+<body>
+<div class="riskCard">
+  <b>第14段階：調整済みと天井圏を区別</b>
+  <div style="font-size:11px;color:#57606a;margin-top:4px">
+    現在の天井危険度と、過去365日内の似た値動き最大40件が、その後10%以上・20%以上調整した割合を別々に分析。
+    類似候補から最大40件を採用し、類似度の高いケースを強く反映。近接した同一トレンドの重複ケースは7営業日以内を間引きます。利益率は天井危険度の計算に使用しません。
+  </div>
+</div>
+
+<div class="riskCard">
+  <b>第12段階：調整局面入り確率</b>
+  <div style="font-size:11px;color:#57606a;margin-top:4px">
+    RSI・短期上昇率・EMA乖離・出来高・高値からの下落率などを複合し、
+    「これから調整に入り始める可能性」を5〜95%で表示します。下落済み銘柄は自動的に危険度を下げます。
+  </div>
+</div>
+
+<div class="wrap">
+<h1>📈 利確判定アプリ</h1>
+<div id="quickJudge" class="card hidden" style="position:sticky;top:8px;z-index:20">
+  <div style="font-size:12px;color:#666">現在の最終判定</div>
+  <div id="quickJudgeText" style="font-size:25px;font-weight:900;margin:5px 0">-</div>
+  <div id="quickJudgeMeta" class="small"></div>
+</div>
+
+<div class="card">
+<label>APIキー（初回だけ入力）</label>
+<input id="apiKey" type="password" placeholder="Twelve Data API Key">
+<button onclick="saveKey()">APIキーを保存</button>
+<button class="secondary" onclick="clearKey()">保存したAPIキーを削除</button>
+<p id="saveMsg" class="small"></p>
+</div>
+
+<div class="card">
+<b>📊 PF判定一覧（最大6銘柄）</b>
+<p class="small">使わない枠は「銘柄なし」。保存しておけば次回も同じPFで表示します。</p>
+<div id="pfList"></div>
+<button onclick="checkPF()">6銘柄をまとめて判定</button>
+</div>
+
+<div class="card">
+<b>＋ 新しい銘柄を追加</b>
+<div class="row">
+<input id="newTicker" placeholder="例：NVDA">
+<select id="newExchange"><option>NASDAQ</option><option>NYSE</option></select>
+</div>
+<button class="secondary" onclick="addTicker()">銘柄を追加</button>
+<p id="addMsg" class="small"></p>
+</div>
+<div class="card">
+<label>銘柄</label>
+<select id="symbol">
+<option value="SNDK">SNDK</option><option value="MU">MU</option><option value="CRDO">CRDO</option>
+<option value="AXT">AXT</option><option value="AEHR">AEHR</option><option value="NBIS">NBIS</option>
+<option value="ALAB">ALAB</option><option value="PLTR">PLTR</option><option value="CRWD">CRWD</option><option value="BE">BE</option>
+</select>
+
+<button onclick="check()">現在値・RSIを取得して判定</button>
+<p class="small" style="margin-top:8px">※取得単価は上の「PF判定一覧」から入力・自動保存します。</p>
+</div>
+
+<div id="result" class="card hidden" style="position:sticky;top:85px;z-index:10">
+<div class="small">現在株価</div>
+<div id="price" class="value">-</div>
+<div class="small">RSI(14)</div>
+<div id="rsi" class="value">-</div>
+<div class="small">含み益率</div>
+<div id="profit" class="value">-</div>
+<hr>
+<div id="judgement" class="status">-</div>
+<div id="reason" class="small"></div>
+</div>
+
+<div class="card">
+<b>利確ルール（現在版）</b>
+<p class="small">
++20〜25%：基本ホールド<br>
++40〜50%：過熱時に10〜20%利確検討<br>
++70〜80%：20%前後利確検討<br>
++100%：40〜50%利確<br>
+RSI 75〜80：過熱警戒<br>
+RSI 80以上：利確を強めに検討
+</p>
+</div>
+</div>
+
+<script>
+const KEY_NAME="takeprofit_twelvedata_api_key";
+const keyInput=document.getElementById("apiKey");
+const saved=localStorage.getItem(KEY_NAME);
+if(saved){ keyInput.value=saved; document.getElementById("saveMsg").textContent="✅ APIキーは保存済みです"; }
+
+function saveKey(){
+  const k=keyInput.value.trim();
+  if(!k){document.getElementById("saveMsg").textContent="APIキーを入力してください";return;}
+  localStorage.setItem(KEY_NAME,k);
+  document.getElementById("saveMsg").textContent="✅ 保存しました。次回から入力不要です。";
+}
+function clearKey(){
+  localStorage.removeItem(KEY_NAME);
+  keyInput.value="";
+  document.getElementById("saveMsg").textContent="保存したAPIキーを削除しました";
+}
+function getKey(){ return localStorage.getItem(KEY_NAME)||keyInput.value.trim(); }
+
+async function api(url){
+  const r=await fetch(url);
+  const d=await r.json();
+  if(d.status==="error") throw new Error(d.message||"APIエラー");
+  return d;
+}
+
+async function check(){
+  const key=getKey();
+  if(!key){alert("まずAPIキーを保存してください");return;}
+  const symbol=document.getElementById("symbol").value;
+  const exchanges={SNDK:"NASDAQ",MU:"NASDAQ",CRDO:"NASDAQ",AXT:"NASDAQ",AEHR:"NASDAQ",NBIS:"NASDAQ",ALAB:"NASDAQ",PLTR:"NASDAQ",CRWD:"NASDAQ",BE:"NYSE"};
+  const exchange=exchanges[symbol]||"NASDAQ";
+  const costs=getCosts();
+  const cost=parseFloat(costs[symbol]||"");
+  if(!cost || cost<=0){alert("PF判定一覧で取得単価を入力してください");return;}
+
+  const result=document.getElementById("result");
+  result.classList.remove("hidden");
+  document.getElementById("judgement").textContent="取得中…";
+  document.getElementById("reason").textContent="";
+
+  try{
+    const apiSymbol=symbol==="AXT"?"AXTI":symbol;
+    const p=await api(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(apiSymbol)}&exchange=${encodeURIComponent(exchange)}&apikey=${encodeURIComponent(key)}`);
+    const r=await api(`https://api.twelvedata.com/rsi?symbol=${encodeURIComponent(apiSymbol)}&exchange=${encodeURIComponent(exchange)}&interval=1day&period=14&outputsize=1&apikey=${encodeURIComponent(key)}`);
+    const price=parseFloat(p.price);
+    const rsi=parseFloat(r.values[0].rsi);
+    const profit=(price/cost-1)*100;
+
+    document.getElementById("price").textContent=`$${price.toFixed(2)}`;
+    document.getElementById("rsi").textContent=rsi.toFixed(1);
+    document.getElementById("profit").textContent=`${profit>=0?"+":""}${profit.toFixed(1)}%`;
+
+    let j="🟢 ホールド", reason="";
+    if(profit>=100){j="🔴 40〜50%利確";reason="利益が+100%に到達。基本ルールでは元本回収を兼ねて大きめの利確。";}
+    else if(profit>=70 && rsi>=80){j="🔴 20〜30%利確";reason="+70〜80%以上かつRSI80以上。過熱が強いため利確を強めに検討。";}
+    else if(profit>=70){j="🟡 20%前後利確検討";reason="+70〜80%到達。強いトレンドなら保有継続も可能。";}
+    else if(profit>=40 && rsi>=80){j="🟡 20%利確検討";reason="+40〜50%以上かつRSI80以上。短期過熱を警戒。";}
+    else if(profit>=40 && rsi>=75){j="🟡 10〜20%利確検討";reason="+40〜50%以上かつRSI75〜80。過熱を確認。";}
+    else if(profit>=20 && rsi>=80){j="🟡 10%利確検討";reason="+20〜25%以上かつRSI80以上。強い上昇でも過熱を警戒。";}
+    else {reason="利益率とRSIだけでは強い利確シグナルなし。上昇トレンド継続なら保有優先。";}
+
+    document.getElementById("judgement").textContent=j;
+    document.getElementById("reason").textContent=reason;
+  }catch(e){
+    document.getElementById("judgement").textContent="⚠️ 取得エラー";
+    document.getElementById("reason").textContent=e.message+"（銘柄はNASDAQ/NYSEを指定して再取得しています。APIキー・利用上限も確認してください）";
+  }
+}
+</script>
+
+
+
+<script>
+const BASE_SYMBOLS=["SNDK","MU","CRDO","AXT","AEHR","NBIS","ALAB","PLTR","CRWD","BE"];
+const PF_KEY="takeprofit_pf_v1", CUSTOM_KEY="takeprofit_custom_symbols_v1";
+function getCustom(){try{return JSON.parse(localStorage.getItem(CUSTOM_KEY)||"{}")||{};}catch(e){return {};}}
+function getSymbols(){
+  const c=getCustom(); return BASE_SYMBOLS.concat(Object.keys(c)).filter((v,i,a)=>a.indexOf(v)===i);
+}
+function exchangeOf(sym){ if(sym==="BE") return "NYSE"; const c=getCustom(); return c[sym]||"NASDAQ"; }
+function populateAllSymbolSelects(){
+  const syms=getSymbols(), main=document.getElementById("symbol"), old=main.value;
+  main.innerHTML=syms.map(x=>`<option value="${x}">${x}</option>`).join("");
+  if(syms.includes(old)) main.value=old;
+}
+function getPF(){
+  try{const x=JSON.parse(localStorage.getItem(PF_KEY)||"[]"); return Array.isArray(x)?x.slice(0,6):[];}catch(e){return [];}
+}
+function savePF(a){localStorage.setItem(PF_KEY,JSON.stringify(a.slice(0,6)));}
+function getCosts(){try{return JSON.parse(localStorage.getItem("takeprofit_costs_v1")||"{}")||{};}catch(e){return {};}}
+function savePfCost(i,v){
+  const a=getPF(), sym=a[i];
+  if(!sym)return;
+  const n=parseFloat(v);
+  if(!(n>0))return;
+  const costs=getCosts(); costs[sym]=String(v);
+  localStorage.setItem("takeprofit_costs_v1",JSON.stringify(costs));
+  const msg=document.getElementById("pfcostmsg"+i);
+  if(msg)msg.textContent="保存済み";
+}
+function renderPF(){
+  const syms=getSymbols(), pf=getPF(), costs=getCosts(), el=document.getElementById("pfList");
+  let rows="";
+  for(let i=0;i<6;i++){
+    const cur=pf[i]||"", cost=cur?(costs[cur]||""):"";
+    rows+=`<div class="pf-row">
+      <select data-pf="${i}" onchange="pfChanged(${i},this.value)">
+        <option value="">銘柄なし</option>${syms.map(x=>`<option value="${x}" ${x===cur?"selected":""}>${x}</option>`).join("")}
+      </select>
+      <div class="pf-cost-wrap">
+        <span class="pf-cost-label">取得単価 $</span>
+        <input class="pf-cost" id="pfcost${i}" type="number" step="0.01" inputmode="decimal" placeholder="未入力" value="${cost}" ${cur?"":"disabled"} oninput="savePfCost(${i},this.value)">
+        <span class="pf-cost-saved" id="pfcostmsg${i}">${cost?"保存済み":""}</span>
+      </div>
+      <button class="pf-btn" onclick="openPF(${i})">詳細</button>
+      <div style="grid-column:1/-1"><div id="pfj${i}" class="pf-judge">-</div><div id="pfm${i}" class="pf-meta">未判定</div></div>
+    </div>`;
+  }
+  el.innerHTML=rows;
+}
+function pfChanged(i,v){
+  const a=getPF();a[i]=v;savePF(a);
+  const costs=getCosts();
+  if(!v){
+    const input=document.getElementById("pfcost"+i); if(input){input.value="";input.disabled=true;}
+    const msg=document.getElementById("pfcostmsg"+i); if(msg)msg.textContent="";
+  }else{
+    const input=document.getElementById("pfcost"+i); if(input){input.disabled=false;input.value=costs[v]||"";}
+    const msg=document.getElementById("pfcostmsg"+i); if(msg)msg.textContent=costs[v]?"保存済み":"";
+  }
+}
+function openPF(i){const a=getPF(), sym=a[i];if(!sym)return;document.getElementById("symbol").value=sym;document.getElementById("symbol").dispatchEvent(new Event("change"));window.scrollTo({top:0,behavior:"smooth"});}
+function addTicker(){
+  const t=document.getElementById("newTicker").value.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,"");
+  const ex=document.getElementById("newExchange").value;
+  if(!t){document.getElementById("addMsg").textContent="銘柄コードを入力してください";return;}
+  const c=getCustom();c[t]=ex;localStorage.setItem(CUSTOM_KEY,JSON.stringify(c));
+  populateAllSymbolSelects();renderPF();document.getElementById("symbol").value=t;document.getElementById("symbol").dispatchEvent(new Event("change"));
+  document.getElementById("addMsg").textContent="✅ "+t+"を追加しました";
+}
+function simpleRSI(closes,n=14){
+  if(closes.length<n+1) return null;
+  let gain=0,abs=0;
+  for(let i=0;i<n;i++){
+    const d=closes[i]-closes[i+1];
+    if(d>0) gain+=d;
+    abs+=Math.abs(d);
+  }
+  return abs===0?50:100*gain/abs;
+}
+
+const PF_CACHE_KEY="takeprofit_pf_cache_v2";
+const PF_CACHE_MS=55000;
+
+function loadPfCache(){
+  try{return JSON.parse(localStorage.getItem(PF_CACHE_KEY)||"{}")}catch(e){return {}}
+}
+function savePfCache(x){
+  try{localStorage.setItem(PF_CACHE_KEY,JSON.stringify(x))}catch(e){}
+}
+function simpleRsiFromCloses(closes,n=14){
+  if(!Array.isArray(closes)||closes.length<n+1) return null;
+  let up=0, down=0;
+  for(let i=0;i<n;i++){
+    const diff=closes[i]-closes[i+1];
+    if(diff>0) up+=diff;
+    else down+=-diff;
+  }
+  const total=up+down;
+  return total===0?50:100*up/total;
+}
+function ema(vals,n){
+  if(!vals.length) return NaN;
+  const k=2/(n+1);
+  let e=vals[vals.length-1];
+  for(let i=vals.length-2;i>=0;i--) e=vals[i]*k+e*(1-k);
+  return e;
+}
+
+function calcSeriesFeatures(vals, i){
+  // vals are newest -> oldest. i is the reference day.
+  const closes=vals.map(v=>v.close);
+  const price=closes[i];
+  function rsiAt(idx,n=14){
+    if(idx+n>=closes.length) return null;
+    let up=0,down=0;
+    for(let k=idx;k<idx+n;k++){
+      const diff=closes[k]-closes[k+1];
+      if(diff>0)up+=diff; else down-=diff;
+    }
+    return (up+down)===0?50:100*up/(up+down);
+  }
+  function emaAt(idx,n=20){
+    if(idx+n-1>=closes.length)return null;
+    let e=closes[idx+n-1];
+    const k=2/(n+1);
+    for(let kidx=idx+n-2;kidx>=idx;kidx--) e=closes[kidx]*k+e*(1-k);
+    return e;
+  }
+  const r=rsiAt(i,14), rp=rsiAt(i+1,14);
+  const c5=(i+5<closes.length)?(price/closes[i+5]-1)*100:null;
+  const c10=(i+10<closes.length)?(price/closes[i+10]-1)*100:null;
+  const c20=(i+20<closes.length)?(price/closes[i+20]-1)*100:null;
+  const e20=emaAt(i,20);
+  const gap=Number.isFinite(e20)?(price/e20-1)*100:null;
+  const hi=Math.max(...closes.slice(i,Math.min(closes.length,i+60)));
+  const dd=hi>0?(price/hi-1)*100:null;
+  const vr=vals[i]?.volume;
+  const base=vals.slice(i+1,Math.min(vals.length,i+21)).map(v=>v.volume).filter(Number.isFinite);
+  const avg=base.length?base.reduce((a,b)=>a+b,0)/base.length:null;
+  const volRatio=Number.isFinite(vr)&&avg>0?vr/avg:null;
+  return {rsi:r,rsiPrev:rp,rsiDelta:(Number.isFinite(r)&&Number.isFinite(rp))?r-rp:null,
+    change5:c5,change10:c10,change20:c20,emaGap:gap,drawdown:dd,volumeRatio:volRatio};
+}
+
+
+function historicalAnalogProbability(vals, current){
+  const samples=[];
+  const maxI=vals.length-35;
+  for(let i=20;i<=maxI;i++){
+    const f=calcSeriesFeatures(vals,i);
+    if(!Number.isFinite(f.rsi)||!Number.isFinite(f.change5)||!Number.isFinite(f.change10)||
+       !Number.isFinite(f.emaGap)) continue;
+    // Future relative to the historical reference day: i-1 ... i-20.
+    const future=vals.slice(i-20,i).map(v=>v.close);
+    if(future.length<20) continue;
+    const p=vals[i].close;
+    const min10=Math.min(...future.slice(0,10));
+    const min20=Math.min(...future.slice(0,20));
+    samples.push({
+      f,
+      dd10:(min10/p-1)*100,
+      dd20:(min20/p-1)*100,
+      idx:i
+    });
+  }
+  if(samples.length<25) return {p10:null,p20:null,n:0,candidates:samples.length,analogs:[]};
+
+  const keys=["rsi","change5","change10","emaGap","volumeRatio"];
+  const med={}, scale={rsi:10,change5:15,change10:25,emaGap:12,volumeRatio:0.8};
+  keys.forEach(k=>{
+    const a=samples.map(x=>Number(x.f[k])).filter(Number.isFinite).sort((a,b)=>a-b);
+    med[k]=a.length?a[Math.floor(a.length/2)]:0;
+    if(a.length){
+      const mad=a.map(v=>Math.abs(v-med[k])).sort((x,y)=>x-y)[Math.floor(a.length/2)]||0;
+      if(mad>0)scale[k]=Math.max(mad*1.4826,scale[k]*0.35);
+    }
+  });
+
+  const dist=x=>{
+    let sum=0,n=0;
+    keys.forEach(k=>{
+      if(Number.isFinite(current[k])&&Number.isFinite(x.f[k])){
+        const z=(current[k]-x.f[k])/scale[k];
+        sum+=z*z;n++;
+      }
+    });
+    return n?Math.sqrt(sum/n):99;
+  };
+
+  let ranked=samples.map(x=>({...x,d:dist(x)}))
+    .filter(x=>x.d<3.5)
+    .sort((a,b)=>a.d-b.d);
+
+  // Prevent a single historical run of adjacent days from dominating.
+  // Keep the best/closest example within a 7-trading-day neighborhood.
+  const selected=[];
+  for(const x of ranked){
+    if(selected.every(y=>Math.abs(y.idx-x.idx)>=7)){
+      selected.push(x);
+      if(selected.length>=40) break;
+    }
+  }
+  if(selected.length<12) return {p10:null,p20:null,n:selected.length,candidates:ranked.length,analogs:[]};
+
+  // Similarity-weighted probabilities. Closer analogs get materially more weight.
+  let w10=0,w20=0,ws=0;
+  selected.forEach((x,rank)=>{
+    const similarityWeight=1/Math.pow(0.30+x.d,1.35);
+    // Slightly emphasize the closest 10 cases without making one case dominant.
+    const rankWeight=rank<10?1.12:1;
+    const w=similarityWeight*rankWeight;
+    ws+=w;
+    if(x.dd10<=-10)w10+=w;
+    if(x.dd20<=-20)w20+=w;
+  });
+
+  const analogs=selected.slice(0,5).map(x=>({
+    d:Number(x.d.toFixed(2)),dd10:Number(x.dd10.toFixed(1)),dd20:Number(x.dd20.toFixed(1))
+  }));
+
+  return {
+    p10:Math.round(100*w10/ws),
+    p20:Math.round(100*w20/ws),
+    n:selected.length,
+    candidates:ranked.length,
+    analogs
+  };
+}
+
+function buildPfMetrics(sym, d, cost){
+  if(!d || d.status==="error") throw new Error(d?.message||"株価データがありません");
+  const vals=(d.values||[]).map(v=>({
+    close:parseFloat(v.close), volume:parseFloat(v.volume)
+  })).filter(v=>Number.isFinite(v.close));
+  if(vals.length<60) throw new Error("過去データが不足しています");
+  const closes=vals.map(v=>v.close);
+  const f=calcSeriesFeatures(vals,0);
+  const price=closes[0];
+  const profit=(price/cost-1)*100;
+  const ceiling=calcCeilingDanger({...f});
+  const adj=calcAdjustmentProbability({...f});
+  const analog=historicalAnalogProbability(vals,f);
+
+  // Blend the rule-based transition probability with historical analogs only
+  // when enough close matches exist. The analog component gets the larger weight.
+  let adjusted=adj.p;
+  if(Number.isFinite(analog.p10)){
+    adjusted=Math.round(analog.p10*0.65+adj.p*0.35);
+  }
+  if(Number.isFinite(analog.p20)){
+    // A 20% drawdown is a stronger "major correction" signal.
+    adjusted=Math.round(adjusted*0.65+analog.p20*0.35);
+  }
+  adjusted=Math.max(5,Math.min(95,adjusted));
+  const aRisk=Math.max(1,Math.min(10,Math.round(adjusted/10)));
+  const aLabel=adjusted>=85?"調整入り濃厚":adjusted>=70?"調整入り有力":adjusted>=55?"調整警戒":adjusted>=40?"やや警戒":"上昇継続優勢";
+
+  let j="🟢 ホールド";
+  if(ceiling.risk>=9 && adjusted>=80) j="🔴 全利確級";
+  else if(ceiling.risk>=8 && adjusted>=70) j="🔴 強い利確警戒";
+  else if(ceiling.risk>=7) j="🟠 利確警戒";
+  else if(ceiling.risk>=5 && adjusted>=60) j="🟡 調整警戒";
+  else if(profit>=100 && ceiling.risk<7) j="🟡 利益保護を検討";
+
+  return {sym,j,price,rsi:f.rsi,rsi14:f.rsi,rsi14Prev:f.rsiPrev,rsiDelta:f.rsiDelta,
+    profit,change5:f.change5,change10:f.change10,emaGap:f.emaGap,volumeRatio:f.volumeRatio,
+    drawdown:f.drawdown,ceilingData:ceiling,adjustData:adj,riskData:adj,
+    adjustmentProbability:adjusted,analog};
+}
+
+async function checkPF(){
+  const key=getKey();
+  if(!key){alert("まずAPIキーを保存してください");return;}
+  if(window.__pfChecking){return;}
+  window.__pfChecking=true;
+  const btn=document.querySelector('button[onclick="checkPF()"]');
+  if(btn){btn.disabled=true;btn.textContent="判定中…（APIは1回だけ）";}
+  const a=getPF();
+  const symbols=[...new Set(a.filter(Boolean))];
+  const rows=[0,1,2,3,4,5];
+  try{
+    const costs=JSON.parse(localStorage.getItem("takeprofit_costs_v1")||"{}");
+    const cache=loadPfCache();
+    const now=Date.now();
+    const results={};
+    const need=[];
+    symbols.forEach(sym=>{
+      const cost=parseFloat(costs[sym]||"");
+      if(!cost){results[sym]={sym,error:"取得単価未登録"};return;}
+      const c=cache[sym];
+      if(c && now-c.ts<PF_CACHE_MS && c.data){
+        results[sym]={...c.data};
+      }else need.push(sym);
+    });
+
+    // One HTTP request for all uncached PF symbols.
+    if(need.length){
+      // Twelve Data batch uses comma-separated symbols. Do NOT append :EXCHANGE
+      // to every symbol; that format can make the batch response unusable.
+      const batch=need.map(sym=>sym==="AXT"?"AXTI":sym).join(",");
+      const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(batch)}&interval=1day&outputsize=365&apikey=${encodeURIComponent(key)}`;
+      const resp=await fetch(url);
+      const json=await resp.json();
+      if(resp.status===429 || json?.status==="error"){
+        throw new Error(json?.message||"API上限に達しました。1分待ってから再実行してください。");
+      }
+
+      function findBatchData(sym){
+        const apiSymbol=sym==="AXT"?"AXTI":sym;
+        if(json && json.values) return need.length===1 ? json : null;
+        if(!json || typeof json!=="object") return null;
+        if(json[apiSymbol]) return json[apiSymbol];
+        if(json[sym]) return json[sym];
+        const k=Object.keys(json).find(k=>{
+          const u=String(k).toUpperCase();
+          return u===apiSymbol.toUpperCase() || u.startsWith(apiSymbol.toUpperCase()+":");
+        });
+        return k ? json[k] : null;
+      }
+
+      need.forEach(sym=>{
+        const d=findBatchData(sym);
+        try{
+          const cost=parseFloat(costs[sym]||"");
+          if(!d) throw new Error("株価データがありません（APIの銘柄コード応答を確認）");
+          const data=buildPfMetrics(sym,d,cost);
+          results[sym]=data;
+          cache[sym]={ts:now,data};
+        }catch(e){
+          results[sym]={sym,error:e.message||"取得エラー"};
+        }
+      });
+      savePfCache(cache);
+    }
+
+    rows.forEach(i=>{
+      const sym=a[i]||"";
+      const j=document.getElementById("pfj"+i), m=document.getElementById("pfm"+i);
+      if(!sym){j.textContent="銘柄なし";m.textContent="";return;}
+      const x=results[sym];
+      if(!x || x.error){
+        j.textContent="⚠️ "+(x?.error||"取得エラー");
+        m.textContent="";
+        return;
+      }
+      j.textContent=x.j;
+      m.textContent=`$${x.price.toFixed(2)} / RSI ${x.rsi.toFixed(1)} / ${x.profit>=0?"+":""}${x.profit.toFixed(1)}%`;
+      const old=j.parentElement.querySelector(".pfRiskBlock");
+      if(old) old.remove();
+      const block=document.createElement("div");
+      block.innerHTML=renderPfRiskBlock(x);
+      j.parentElement.appendChild(block);
+    });
+  }catch(e){
+    rows.forEach(i=>{
+      const sym=a[i]||"";
+      if(!sym)return;
+      const j=document.getElementById("pfj"+i), m=document.getElementById("pfm"+i);
+      j.textContent="⚠️ 取得エラー";
+      m.textContent=e.message||"APIエラー";
+    });
+  }finally{
+    window.__pfChecking=false;
+    if(btn){btn.disabled=false;btn.textContent="6銘柄をまとめて判定";}
+  }
+}
+
+populateAllSymbolSelects();renderPF();
+</script>
+
+<script>
+/* 第5段階: 調整局面入り確率。既存データに追加するだけで動作する独立ロジック */
+
+function calcCeilingDanger(d){
+  const r=Number(d.rsi14 ?? d.rsi ?? NaN), r6=Number(d.rsi6 ?? NaN);
+  const c5=Number(d.change5 ?? d.chg5 ?? NaN), c10=Number(d.change10 ?? d.chg10 ?? NaN);
+  const gap=Number(d.emaGap ?? NaN), vol=Number(d.volumeRatio ?? d.volRatio ?? NaN);
+  const dd=Number(d.drawdown ?? d.ddFromHigh ?? NaN);
+  let s=0, f=[];
+  if(Number.isFinite(r)){if(r>=85){s+=25;f.push("RSI超過熱")}else if(r>=75){s+=17;f.push("RSI高水準")}else if(r>=65){s+=8;f.push("RSI上昇")}}
+  if(Number.isFinite(r6)&&r6>=85){s+=7;f.push("短期RSI過熱")}
+  if(Number.isFinite(c5)){if(c5>=30){s+=18;f.push("5日急騰")}else if(c5>=20){s+=12;f.push("5日上昇加速")}else if(c5>=10){s+=5;f.push("短期上昇")}}
+  if(Number.isFinite(c10)){if(c10>=45){s+=12;f.push("10日急騰")}else if(c10>=30){s+=7;f.push("10日上昇")}}
+  if(Number.isFinite(gap)){if(gap>=20){s+=17;f.push("EMA乖離大")}else if(gap>=12){s+=9;f.push("EMA乖離")}}
+  if(Number.isFinite(vol)){if(vol>=2.5){s+=13;f.push("出来高急増")}else if(vol>=1.8){s+=7;f.push("出来高増")}}
+  // Deep drawdown means this is no longer a "ceiling" state.
+  if(Number.isFinite(dd)){if(dd<=-40)s-=35;else if(dd<=-25)s-=20;else if(dd<=-15)s-=8}
+  const risk=Math.max(1,Math.min(10,Math.ceil(Math.max(0,s)/10)));
+  const label=risk>=9?"全利確級":risk>=7?"強い利確警戒":risk>=5?"利確警戒":risk>=3?"注意":"上昇継続優勢";
+  const cls=risk>=9?"risk-extreme":risk>=7?"risk-high":risk>=5?"risk-mid":"risk-low";
+  return {risk,label,cls,reasons:[...new Set(f)].slice(0,4)};
+}
+
+function calcAdjustmentProbability(d){
+  const r=Number(d.rsi14 ?? d.rsi ?? NaN);
+  const r6=Number(d.rsi6 ?? NaN);
+  const c5=Number(d.change5 ?? d.chg5 ?? NaN), c10=Number(d.change10 ?? d.chg10 ?? NaN);
+  const gap=Number(d.emaGap ?? NaN), vol=Number(d.volumeRatio ?? d.volRatio ?? NaN);
+  const dd=Number(d.drawdown ?? d.ddFromHigh ?? NaN);
+  const prevRsi=Number(d.rsi14Prev ?? NaN), rsiDelta=Number(d.rsiDelta ?? NaN);
+  let p=35, f=[];
+  // Probability is intentionally NOT derived from the ceiling score.
+  // It asks whether the current advance is likely to transition into correction.
+  if(Number.isFinite(r)&&Number.isFinite(prevRsi)){
+    if(r<prevRsi-10){p+=16;f.push("RSI急低下")}
+    else if(r<prevRsi-5){p+=9;f.push("RSI低下")}
+    else if(r>prevRsi+8){p-=7;f.push("RSI上昇継続")}
+  } else if(Number.isFinite(rsiDelta)){
+    if(rsiDelta<=-10){p+=15;f.push("RSI急低下")}
+    else if(rsiDelta<=-5){p+=8;f.push("RSI低下")}
+    else if(rsiDelta>=8){p-=6;f.push("RSI上昇継続")}
+  }
+  if(Number.isFinite(c5)&&Number.isFinite(c10)){
+    // Very strong acceleration can still continue; this alone should not imply a correction.
+    if(c5>0 && c10>0 && c5<c10*0.45){p+=12;f.push("上昇速度鈍化")}
+    else if(c5>0 && c10>0 && c5>c10*0.75){p-=9;f.push("上昇勢い維持")}
+  }
+  if(Number.isFinite(gap)){
+    if(gap>=25){p+=10;f.push("高値圏で乖離大")}
+    else if(gap>=15){p+=5;f.push("高値圏で乖離")}
+  }
+  if(Number.isFinite(vol)&&Number.isFinite(c5)){
+    // High volume on a strong advance is not automatically bearish.
+    // Only treat it as confirmation when price acceleration is weakening.
+    if(vol>=2.5 && c5>0 && c5<10){p+=9;f.push("出来高増＋上昇鈍化")}
+    else if(vol>=2.5 && c5>=20){p-=5;f.push("出来高伴う強い上昇")}
+  }
+  if(Number.isFinite(r)&&r>=80 && Number.isFinite(c5) && c5<5){p+=10;f.push("過熱後の伸び鈍化")}
+  if(Number.isFinite(dd)){
+    if(dd<=-40){p-=30;f.push("調整済み")}
+    else if(dd<=-25){p-=18;f.push("既に大幅調整")}
+    else if(dd<=-15){p-=8;f.push("高値から調整中")}
+    else if(dd>=-3){p+=5;f.push("高値圏")}
+  }
+  p=Math.max(5,Math.min(95,Math.round(p)));
+  const risk=Math.max(1,Math.min(10,Math.round(p/10)));
+  const label=p>=85?"調整入り濃厚":p>=70?"調整入り有力":p>=55?"調整警戒":p>=40?"やや警戒":"上昇継続優勢";
+  const cls=p>=85?"risk-extreme":p>=70?"risk-high":p>=55?"risk-mid":"risk-low";
+  if(!f.length)f=["調整への転換サイン少"];
+  return {p,risk,label,cls,reasons:[...new Set(f)].slice(0,4)};
+}
+
+function calcRisk10(d){
+  return calcCeilingDanger(d);
+}
+
+function adjustmentHtml(d){
+  const c=calcCeilingDanger(d||{}), a=calcAdjustmentProbability(d||{});
+  return '<div class="riskCard"><div><span class="risk10 '+c.cls+'"><span class="dot"></span>天井危険度 '+c.risk+'/10</span> '+
+    '<span class="adjustProb">調整局面入り確率 '+a.p+'%</span></div>'+
+    '<div class="factorLine"><b>天井判定:</b> '+c.label+'　 <b>調整判定:</b> '+a.label+'</div>'+
+    '<div class="factorLine"><b>天井要因:</b> '+c.reasons.join(" / ")+'</div>'+
+    '<div class="factorLine"><b>調整要因:</b> '+a.reasons.join(" / ")+'</div></div>';
+}
+window.calcAdjustmentProbability=calcAdjustmentProbability;
+window.adjustmentHtml=adjustmentHtml;
+</script>
+
+
+<script>
+/* 第7段階: PF一覧表示。API取得はcheckPF()の1回のバッチ取得だけ。 */
+function renderPfRiskBlock(data){
+  const c=data.ceilingData||calcCeilingDanger(data||{});
+  const a=data.adjustData||calcAdjustmentProbability(data||{});
+  const p=Number.isFinite(data.adjustmentProbability)?data.adjustmentProbability:a.p;
+  const profit=Number(data?.profit);
+  const dd=Number(data?.drawdown);
+  const icon=c.risk>=9?"🔴":c.risk>=7?"🟠":c.risk>=5?"🟡":"🟢";
+  const profitText=Number.isFinite(profit)?((profit>=0?"+":"")+profit.toFixed(1)+"%"):"未登録";
+
+  const alreadyAdjusted=Number.isFinite(dd)&&dd<=-15;
+  const probabilityTitle=alreadyAdjusted?"追加調整確率":"調整局面入り確率";
+  const contextLabel=alreadyAdjusted
+    ? (dd<=-35?"大幅調整済み・反転/回復待ち": "調整中・回復確認待ち")
+    : (p>=85?"調整入り濃厚":p>=70?"調整入り有力":p>=55?"調整警戒":p>=40?"やや警戒":"上昇継続優勢");
+
+  const warning=c.risk>=7;
+  return `<div class="pfRiskBlock">
+    <div class="pfTopLine"><strong>${icon} 天井危険度 ${c.risk}/10</strong><strong>${probabilityTitle} ${p}%</strong><span>購入価格から ${profitText}</span></div>
+    <div>天井判定：${c.label}　／　${probabilityTitle}判定：${contextLabel}</div>
+
+    ${warning?`<div class="profitRiskNotice warn"><b>⚠️ 利益率に関係なく警戒</b> — 株価指標が加熱しています。</div>`:""}
+    <div class="pfRiskReasons"><b>天井要因：</b>${c.reasons.join(" / ")}</div>
+    <div class="pfRiskReasons"><b>${alreadyAdjusted?"追加調整":"調整"}要因：</b>${a.reasons.join(" / ")}</div>
+
+  </div>`;
+}
+window.renderPfRiskBlock=renderPfRiskBlock;
+</script>
+
+
+<script>
+function forcePFOneColumn(){
+  const grid=document.getElementById("pf2colGrid");
+  if(!grid)return;
+  grid.style.setProperty("display","grid","important");
+  grid.style.setProperty("grid-template-columns","1fr","important");
+  grid.style.setProperty("width","100%","important");
+  [...grid.children].forEach(card=>{
+    card.style.setProperty("width","100%","important");
+    card.style.setProperty("min-width","0","important");
+    card.style.setProperty("max-width","none","important");
+    card.style.setProperty("box-sizing","border-box","important");
+  });
+}
+setTimeout(forcePFOneColumn,200);
+setTimeout(forcePFOneColumn,800);
+setTimeout(forcePFOneColumn,2000);
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
