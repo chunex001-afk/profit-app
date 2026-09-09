@@ -4,12 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>利確判定アプリ</title>
-<link rel="manifest" href="./manifest.webmanifest">
-<meta name="theme-color" content="#111111">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="利確判定">
-<link rel="apple-touch-icon" href="./icon-180.png">
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;background:#f5f5f7;margin:0;color:#111}
 .wrap{max-width:520px;margin:auto;padding:20px}
@@ -89,6 +83,53 @@ button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
   #pf2colGrid .pfRiskBlock strong{font-size:13px !important}
 }
 </style>
+
+<style id="title-gap-fix">
+h1 { margin-bottom: 0 !important; }
+h1 + * { margin-top: 0 !important; padding-top: 0 !important; }
+</style>
+
+
+<style id="title-spacing-fix">
+h1 {
+  margin-bottom: 14px !important;
+}
+</style>
+
+
+<style id="hide-detail-buttons">
+button.detail-btn,
+button[data-action="detail"],
+.detail-btn {
+  display: none !important;
+}
+</style>
+
+
+<style id="safe-hide-ui">
+/* 詳細ボタンはDOM/JSを残したまま非表示 */
+.detail-btn,
+button[data-action="detail"] {
+  display: none !important;
+}
+</style>
+
+
+<style>
+.pf-btn{display:none !important}
+</style>
+
+<style>
+.pfTickerComment{
+  margin-top:6px;
+  padding-top:5px;
+  border-top:1px solid #e5e7eb;
+  color:#111 !important;
+  font-size:11px;
+  line-height:1.45;
+  font-weight:500;
+}
+</style>
 </head>
 <body>
 <div class="riskCard">
@@ -116,7 +157,7 @@ button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
 </div>
 
 <div class="card">
-<label>APIキー（初回だけ入力）</label>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><label style="margin:12px 0 6px">APIキー（初回だけ入力）</label></div>
 <input id="apiKey" type="password" placeholder="Twelve Data API Key">
 <button onclick="saveKey()">APIキーを保存</button>
 <button class="secondary" onclick="clearKey()">保存したAPIキーを削除</button>
@@ -124,10 +165,10 @@ button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
 </div>
 
 <div class="card">
+<button onclick="checkPF()" style="font-size:18px;padding:16px;margin-top:0">📊 6銘柄をまとめて判定</button>
 <b>📊 PF判定一覧（最大6銘柄）</b>
 <p class="small">使わない枠は「銘柄なし」。保存しておけば次回も同じPFで表示します。</p>
 <div id="pfList"></div>
-<button onclick="checkPF()">6銘柄をまとめて判定</button>
 </div>
 
 <div class="card">
@@ -139,7 +180,7 @@ button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
 <button class="secondary" onclick="addTicker()">銘柄を追加</button>
 <p id="addMsg" class="small"></p>
 </div>
-<div class="card">
+<div class="card" style="display:none!important">
 <label>銘柄</label>
 <select id="symbol">
 <option value="SNDK">SNDK</option><option value="MU">MU</option><option value="CRDO">CRDO</option>
@@ -148,7 +189,7 @@ button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
 </select>
 
 <button onclick="check()">現在値・RSIを取得して判定</button>
-<p class="small" style="margin-top:8px">※取得単価は上の「PF判定一覧」から入力・自動保存します。</p>
+
 </div>
 
 <div id="result" class="card hidden" style="position:sticky;top:85px;z-index:10">
@@ -162,6 +203,7 @@ button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
 <div id="judgement" class="status">-</div>
 <div id="reason" class="small"></div>
 </div>
+
 
 <div class="card">
 <b>利確ルール（現在版）</b>
@@ -291,7 +333,7 @@ function renderPF(){
         <input class="pf-cost" id="pfcost${i}" type="number" step="0.01" inputmode="decimal" placeholder="未入力" value="${cost}" ${cur?"":"disabled"} oninput="savePfCost(${i},this.value)">
         <span class="pf-cost-saved" id="pfcostmsg${i}">${cost?"保存済み":""}</span>
       </div>
-      <button class="pf-btn" onclick="openPF(${i})">詳細</button>
+      
       <div style="grid-column:1/-1"><div id="pfj${i}" class="pf-judge">-</div><div id="pfm${i}" class="pf-meta">未判定</div></div>
     </div>`;
   }
@@ -547,17 +589,32 @@ async function checkPF(){
     if(need.length){
       // Twelve Data batch uses comma-separated symbols. Do NOT append :EXCHANGE
       // to every symbol; that format can make the batch response unusable.
-      const batch=need.map(sym=>sym==="AXT"?"AXTI":sym).join(",");
-      const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(batch)}&interval=1day&outputsize=365&apikey=${encodeURIComponent(key)}`;
-      const resp=await fetch(url);
-      const json=await resp.json();
-      if(resp.status===429 || json?.status==="error"){
-        throw new Error(json?.message||"API上限に達しました。1分待ってから再実行してください。");
+      // NASDAQ系とNYSE(BE)を分けて取得。Twelve Dataの環境によっては
+      // 異なる取引所を同一batchに混在させると応答が不安定になるため。
+      const groups=[];
+      const nasdaqNeed=need.filter(sym=>sym!=="BE");
+      if(nasdaqNeed.length) groups.push({symbols:nasdaqNeed,exchange:"NASDAQ"});
+      if(need.includes("BE")) groups.push({symbols:["BE"],exchange:"NYSE"});
+      const responses={};
+      for(const g of groups){
+        const batch=g.symbols.map(sym=>sym==="AXT"?"AXTI":sym).join(",");
+        const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(batch)}&exchange=${encodeURIComponent(g.exchange)}&interval=1day&outputsize=365&apikey=${encodeURIComponent(key)}`;
+        const resp=await fetch(url);
+           const json=await resp.json();
+        if(resp.status===429 || json?.status==="error"){
+          throw new Error(json?.message||"API上限に達しました。1分待ってから再実行してください。");
+        }
+        responses[g.exchange]=json;
       }
 
       function findBatchData(sym){
         const apiSymbol=sym==="AXT"?"AXTI":sym;
-        if(json && json.values) return need.length===1 ? json : null;
+        const ex=sym==="BE"?"NYSE":"NASDAQ";
+        const json=responses[ex];
+        // 取引所ごとに1銘柄だけのレスポンスなら values 形式で返る。
+        // BE(NYSE)をNASDAQ側のneed.lengthで判定しないようにする。
+        const groupSize=ex==="NYSE"?need.filter(x=>x==="BE").length:need.filter(x=>x!=="BE").length;
+        if(json && json.values) return groupSize===1 ? json : null;
         if(!json || typeof json!=="object") return null;
         if(json[apiSymbol]) return json[apiSymbol];
         if(json[sym]) return json[sym];
@@ -709,6 +766,51 @@ window.adjustmentHtml=adjustmentHtml;
 
 <script>
 /* 第7段階: PF一覧表示。API取得はcheckPF()の1回のバッチ取得だけ。 */
+function saveKey(){
+  const k=keyInput.value.trim();
+  if(!k){document.getElementById("saveMsg").textContent="APIキーを入力してください";return;}
+  localStorage.setItem(KEY_NAME,k);
+  document.getElementById("saveMsg").textContent="✅ 保存しました。次回から入力不要です。";
+}
+
+function getTickerBackgroundComment(data){
+  const sym=String(data?.sym||"").toUpperCase();
+  const p=Number(data?.adjustmentProbability);
+  const risk=Number(data?.ceilingData?.risk);
+  const rsi=Number(data?.rsi14 ?? data?.rsi);
+  const dd=Number(data?.drawdown);
+  const profiles={
+    SNDK:"AI向けストレージ・NAND需要が追い風。上昇トレンドが崩れていなければ、短期の調整だけで急いで手放す局面ではない。",
+    MU:"HBM・DRAMの需給改善とAIサーバー需要が成長を支える。過熱サインが弱ければ、MUのような長期上昇型はホールド優先。",
+    CRDO:"AIデータセンター向け高速接続需要が成長材料。短期の値動きより、AIインフラ需要が継続しているかを重視したい。",
+    ALAB:"AIデータセンターの接続・光インターコネクト需要が背景。上昇の土台が強い間は、短期調整だけで売り急がない。",
+    AEHR:"半導体テスト需要の成長期待が材料。ただし値動きが荒くなりやすいため、上昇加速と過熱が重なる場面では利益保護を優先。",
+    AXT:"光通信・半導体向け部材の成長期待がある一方、値動きが大きい銘柄。反発局面では天井サインが再点灯していないかを重視。",
+    NBIS:"AI向けデータセンター・クラウド基盤への成長期待が背景。成長ストーリーが維持され、天井サインが弱ければホールド優先。",
+    PLTR:"AI・データ分析ソフトの成長期待が株価を支える。高値圏で過熱が強まった時だけ利益保護を強める。",
+    CRWD:"サイバーセキュリティ需要を背景にした成長株。トレンドが維持されている間は、短期調整より上昇継続を優先して見る。",
+    BE:"AIデータセンターの電力需要・分散電源テーマが材料。急騰後は値幅が大きくなりやすいため、過熱時は利益保護を意識。"
+  };
+  let base=profiles[sym]||"この銘柄固有の成長材料を背景に、短期指標と上昇トレンドの両方を見て判断。";
+  const c5=Number(data?.change5), c10=Number(data?.change10);
+  const strongRebound=Number.isFinite(c5)&&Number.isFinite(c10)&&c5>=8&&c10>=5;
+  const healthyRebound=Number.isFinite(dd)&&dd<=-10&&dd>-35&&strongRebound&&risk<5&&p<70;
+  const adjustmentInProgress=Number.isFinite(dd)&&dd<=-10&&dd>-35&&!healthyRebound;
+  if(risk>=7 || p>=70 || (Number.isFinite(rsi)&&rsi>=80)){
+    return `${base} 現在は過熱・天井サインが強く、今回は成長期待より利益保護を優先する局面。`;
+  }
+  if(Number.isFinite(dd)&&dd<=-35){
+    return `${base} 現在は高値から大きく調整済みのため、売却より反転確認を優先。`;
+  }
+  if(healthyRebound){
+    return `${base} 現在は調整後の健全な反発を維持しており、上昇トレンドの回復を優先してホールド。`;
+  }
+  if(adjustmentInProgress){
+    return `${base} 現在は調整からの回復中で、底打ち・反発の継続を確認したい局面。基本ホールド・様子見。`;
+  }
+  return `${base} 現時点では過熱・天井サインが強くないため、ホールド優先の判定。`;
+}
+
 function renderPfRiskBlock(data){
   const c=data.ceilingData||calcCeilingDanger(data||{});
   const a=data.adjustData||calcAdjustmentProbability(data||{});
@@ -718,23 +820,46 @@ function renderPfRiskBlock(data){
   const icon=c.risk>=9?"🔴":c.risk>=7?"🟠":c.risk>=5?"🟡":"🟢";
   const profitText=Number.isFinite(profit)?((profit>=0?"+":"")+profit.toFixed(1)+"%"):"未登録";
 
-  const alreadyAdjusted=Number.isFinite(dd)&&dd<=-15;
-  const probabilityTitle=alreadyAdjusted?"追加調整確率":"調整局面入り確率";
-  const contextLabel=alreadyAdjusted
-    ? (dd<=-35?"大幅調整済み・反転/回復待ち": "調整中・回復確認待ち")
-    : (p>=85?"調整入り濃厚":p>=70?"調整入り有力":p>=55?"調整警戒":p>=40?"やや警戒":"上昇継続優勢");
+  // 「追加調整」と「高値調整」を、単純な高値からの下落率だけで切り替えない。
+  // 天井危険度が5以上なら、15%以上下落していても再び高値圏へ戻る局面として
+  // 高値調整リスクを優先する。深い下落かつ天井サインが弱い場合だけ追加調整とする。
+  const deepCorrection=Number.isFinite(dd)&&dd<=-35;
+  const c5=Number(data?.change5), c10=Number(data?.change10);
+  const strongRebound=Number.isFinite(c5)&&Number.isFinite(c10)&&c5>=8&&c10>=5;
+  const healthyRebound=Number.isFinite(dd)&&dd<=-10&&dd>-35&&strongRebound&&c.risk<5&&p<70;
+  const adjustmentInProgress=Number.isFinite(dd)&&dd<=-10&&dd>-35&&!healthyRebound;
+  let stateLevel=1, stateTitle="大幅調整後・回復確認", probabilityTitle="追加調整リスク", riskValue=p, contextLabel="売るより回復を待つ段階";
+  if(c.risk>=7 || p>=70 || (Number.isFinite(data?.rsi14)&&data.rsi14>=80)){
+    stateLevel=5; stateTitle="高値調整リスク"; probabilityTitle="高値調整リスク"; riskValue=Math.max(5,Math.min(95,Math.round((c.risk/10)*100))); contextLabel="天井圏・過熱。利確・利益保護を優先";
+  } else if(c.risk>=5){
+    stateLevel=4; stateTitle="調整警戒"; probabilityTitle="高値調整リスク"; riskValue=Math.max(5,Math.min(95,Math.round((c.risk/10)*100))); contextLabel="上昇後の調整リスクあり。まだ崩れてはいないが注意";
+  } else if(healthyRebound){
+    stateLevel=3; stateTitle="健全な反発維持"; probabilityTitle="調整入りリスク"; riskValue=p; contextLabel="調整後に反発中。上昇トレンド回復中";
+  } else if(adjustmentInProgress){
+    stateLevel=2; stateTitle="調整中"; probabilityTitle="追加調整リスク"; riskValue=p; contextLabel="調整からの回復中。底打ち・反発を確認する段階";
+  } else if(!deepCorrection){
+    stateLevel=3; stateTitle="健全な反発維持"; probabilityTitle="調整入りリスク"; riskValue=p; contextLabel="調整後に反発中。上昇トレンド回復中";
+  }
 
   const warning=c.risk>=7;
-  return `<div class="pfRiskBlock">
-    <div class="pfTopLine"><strong>${icon} 天井危険度 ${c.risk}/10</strong><strong>${probabilityTitle} ${p}%</strong><span>購入価格から ${profitText}</span></div>
-    <div>天井判定：${c.label}　／　${probabilityTitle}判定：${contextLabel}</div>
+  const ceilingState=stateLevel>=4;
 
+  // 重要：コメント対象は表示文字列から推測せず、
+  // PF判定で保持している実際の銘柄コード(data.sym)を直接渡す。
+  const tickerComment = typeof getTickerBackgroundComment==="function"
+    ? getTickerBackgroundComment(data)
+    : "";
+
+  return `<div class="pfRiskBlock">
+    <div class="pfTopLine"><strong>${icon} ${stateLevel}｜${stateTitle}</strong><strong>${probabilityTitle} ${riskValue}%</strong><span>購入価格から ${profitText}</span></div>
+    <div>天井危険度：${c.risk}/10　／　${contextLabel}</div>
     ${warning?`<div class="profitRiskNotice warn"><b>⚠️ 利益率に関係なく警戒</b> — 株価指標が加熱しています。</div>`:""}
     <div class="pfRiskReasons"><b>天井要因：</b>${c.reasons.join(" / ")}</div>
-    <div class="pfRiskReasons"><b>${alreadyAdjusted?"追加調整":"調整"}要因：</b>${a.reasons.join(" / ")}</div>
-
+    <div class="pfRiskReasons"><b>${ceilingState?"天井":"追加調整"}要因：</b>${a.reasons.join(" / ")}</div>
+    ${tickerComment?`<div class="pfTickerComment">${tickerComment}</div>`:""}
   </div>`;
 }
+window.renderPfRiskBlock=renderPfRiskBlock;
 window.renderPfRiskBlock=renderPfRiskBlock;
 </script>
 
@@ -757,12 +882,65 @@ setTimeout(forcePFOneColumn,200);
 setTimeout(forcePFOneColumn,800);
 setTimeout(forcePFOneColumn,2000);
 </script>
+
 <script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  });
+/* 単独銘柄チェック：PF登録・取得単価なし。PF判定とは別に1銘柄だけ確認。 */
+async function checkSpot(){
+  const key=getKey();
+  if(!key){alert("まずAPIキーを保存してください");return;}
+  const input=document.getElementById("spotTicker");
+  const symbol=(input.value||"").trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,"");
+  if(!symbol){alert("銘柄コードを入力してください");return;}
+  const box=document.getElementById("spotResult");
+  box.classList.remove("hidden");
+  box.innerHTML='<div class="small">取得中…</div>';
+  try{
+    const apiSymbol=symbol==="AXT"?"AXTI":symbol;
+    const exchange=exchangeOf(symbol);
+    const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(apiSymbol)}&exchange=${encodeURIComponent(exchange)}&interval=1day&outputsize=365&apikey=${encodeURIComponent(key)}`;
+    const resp=await fetch(url);
+    updateApiCredits(resp);
+    const json=await resp.json();
+    if(resp.status===429 || json?.status==="error") throw new Error(json?.message||"API上限に達しました。1分待ってから再実行してください。");
+    if(!json?.values?.length) throw new Error("株価データがありません。銘柄コードを確認してください。");
+    const d=buildPfMetrics(symbol,json,1);
+    const c=d.ceilingData||calcCeilingDanger(d);
+    const a=d.adjustData||calcAdjustmentProbability(d);
+    const dd=Number(d.drawdown);
+    const deepCorrection=Number.isFinite(dd)&&dd<=-35;
+    const c5=Number(d.change5), c10=Number(d.change10);
+    const strongRebound=Number.isFinite(c5)&&Number.isFinite(c10)&&c5>=8&&c10>=5;
+    const healthyRebound=Number.isFinite(dd)&&dd<=-10&&dd>-35&&strongRebound&&c.risk<5&&a.p<70;
+    const adjustmentInProgress=Number.isFinite(dd)&&dd<=-10&&dd>-35&&!healthyRebound;
+    let riskTitle="追加調整リスク", riskValue=a.p, state="🔵 1｜大幅調整後・回復確認";
+    if(c.risk>=7 || a.p>=70 || Number(d.rsi)>=80){riskTitle="高値調整リスク";riskValue=Math.max(5,Math.min(95,Math.round((c.risk/10)*100)));state="🔴 5｜高値調整リスク";}
+    else if(c.risk>=5){riskTitle="高値調整リスク";riskValue=Math.max(5,Math.min(95,Math.round((c.risk/10)*100)));state="🟠 4｜調整警戒";}
+    else if(healthyRebound){riskTitle="調整入りリスク";riskValue=a.p;state="🟢 3｜健全な反発維持";}
+    else if(adjustmentInProgress){riskTitle="追加調整リスク";riskValue=a.p;state="🟡 2｜調整中";}
+    else if(!deepCorrection){riskTitle="調整入りリスク";riskValue=a.p;state="🟢 3｜健全な反発維持";}
+    const reasons=(riskTitle==="高値調整リスク"?c.reasons:a.reasons).join(" / ");
+    box.innerHTML=`<div class="pfRiskBlock">
+      <div class="pfTopLine"><strong>${symbol}　${state}</strong><strong>${riskTitle} ${riskValue}%</strong></div>
+      <div class="factorLine">現在株価：$${Number(d.price).toFixed(2)}　／　RSI：${Number(d.rsi).toFixed(1)}</div>
+      <div class="factorLine">高値から：${Number(d.drawdown)>=0?"+":""}${Number(d.drawdown).toFixed(1)}%　／　5日：${Number(d.change5)>=0?"+":""}${Number(d.change5).toFixed(1)}%　／　10日：${Number(d.change10)>=0?"+":""}${Number(d.change10).toFixed(1)}%</div>
+      <div class="factorLine">天井危険度：${c.risk}/10</div>
+      <div class="factorLine"><b>主な要因：</b>${reasons||"確認できる強い転換サインなし"}</div>
+    </div>`;
+  }catch(e){
+    box.innerHTML=`<div class="pfRiskBlock"><div class="factorLine">⚠️ ${e.message}</div></div>`;
+  }
 }
 </script>
+
+
+<script>
+(function hideSingleStockCard(){
+  const s=document.getElementById("symbol");
+  if(!s) return;
+  let card=s.closest(".card");
+  if(card) card.style.display="none";
+})();
+</script>
+
 </body>
 </html>
