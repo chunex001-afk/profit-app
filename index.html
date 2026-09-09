@@ -422,14 +422,30 @@ function calcSeriesFeatures(vals, i){
   const c20=(i+20<closes.length)?(price/closes[i+20]-1)*100:null;
   const e20=emaAt(i,20);
   const gap=Number.isFinite(e20)?(price/e20-1)*100:null;
-  const hi=Math.max(...closes.slice(i,Math.min(closes.length,i+60)));
+  const windowEnd=Math.min(closes.length,i+60);
+  const window=closes.slice(i,windowEnd);
+  const hi=Math.max(...window);
+  const hiIdx=i+window.indexOf(hi);
   const dd=hi>0?(price/hi-1)*100:null;
+  // 最高値の後に大きく下落して反転した場合は、旧最高値ではなく
+  // その後の底（反転起点）を新しい天井判定の基準にする。
+  let reboundPct=null, reboundPivot=null, reboundHigh=null, reboundHighDrawdown=null;
+  if(hiIdx>i+4){
+    const postHigh=closes.slice(i,hiIdx+1);
+    reboundPivot=Math.min(...postHigh);
+    if(reboundPivot>0){
+      reboundPct=(price/reboundPivot-1)*100;
+      reboundHigh=Math.max(...postHigh);
+      reboundHighDrawdown=reboundHigh>0?(price/reboundHigh-1)*100:null;
+    }
+  }
   const vr=vals[i]?.volume;
   const base=vals.slice(i+1,Math.min(vals.length,i+21)).map(v=>v.volume).filter(Number.isFinite);
   const avg=base.length?base.reduce((a,b)=>a+b,0)/base.length:null;
   const volRatio=Number.isFinite(vr)&&avg>0?vr/avg:null;
   return {rsi:r,rsiPrev:rp,rsiDelta:(Number.isFinite(r)&&Number.isFinite(rp))?r-rp:null,
-    change5:c5,change10:c10,change20:c20,emaGap:gap,drawdown:dd,volumeRatio:volRatio};
+    change5:c5,change10:c10,change20:c20,emaGap:gap,drawdown:dd,volumeRatio:volRatio,
+    reboundPct:reboundPct,reboundPivot:reboundPivot,reboundHigh:reboundHigh,reboundHighDrawdown:reboundHighDrawdown};
 }
 
 
@@ -553,7 +569,7 @@ function buildPfMetrics(sym, d, cost){
 
   return {sym,j,price,rsi:f.rsi,rsi14:f.rsi,rsi14Prev:f.rsiPrev,rsiDelta:f.rsiDelta,
     profit,change5:f.change5,change10:f.change10,emaGap:f.emaGap,volumeRatio:f.volumeRatio,
-    drawdown:f.drawdown,ceilingData:ceiling,adjustData:adj,riskData:adj,
+    drawdown:f.drawdown,reboundPct:f.reboundPct,reboundPivot:f.reboundPivot,reboundHigh:f.reboundHigh,reboundHighDrawdown:f.reboundHighDrawdown,ceilingData:ceiling,adjustData:adj,riskData:adj,
     adjustmentProbability:adjusted,analog};
 }
 
@@ -680,6 +696,8 @@ function calcCeilingDanger(d){
   const c5=Number(d.change5 ?? d.chg5 ?? NaN), c10=Number(d.change10 ?? d.chg10 ?? NaN);
   const gap=Number(d.emaGap ?? NaN), vol=Number(d.volumeRatio ?? d.volRatio ?? NaN);
   const dd=Number(d.drawdown ?? d.ddFromHigh ?? NaN);
+  const rebound=Number(d.reboundPct ?? NaN);
+  const reboundDD=Number(d.reboundHighDrawdown ?? NaN);
   let s=0, f=[];
   if(Number.isFinite(r)){if(r>=85){s+=25;f.push("RSI超過熱")}else if(r>=75){s+=17;f.push("RSI高水準")}else if(r>=65){s+=8;f.push("RSI上昇")}}
   if(Number.isFinite(r6)&&r6>=85){s+=7;f.push("短期RSI過熱")}
@@ -687,8 +705,16 @@ function calcCeilingDanger(d){
   if(Number.isFinite(c10)){if(c10>=45){s+=12;f.push("10日急騰")}else if(c10>=30){s+=7;f.push("10日上昇")}}
   if(Number.isFinite(gap)){if(gap>=20){s+=17;f.push("EMA乖離大")}else if(gap>=12){s+=9;f.push("EMA乖離")}}
   if(Number.isFinite(vol)){if(vol>=2.5){s+=13;f.push("出来高急増")}else if(vol>=1.8){s+=7;f.push("出来高増")}}
-  // Deep drawdown means this is no longer a "ceiling" state.
-  if(Number.isFinite(dd)){if(dd<=-40)s-=35;else if(dd<=-25)s-=20;else if(dd<=-15)s-=8}
+  // 旧最高値からの下落だけで天井リスクを消さない。反転後は反転起点を評価軸にする。
+  const recovered=Number.isFinite(rebound)&&rebound>=15;
+  if(recovered){
+    if(rebound>=40){s+=12;f.push("反転起点から大幅上昇")}
+    else if(rebound>=25){s+=7;f.push("反転起点から上昇")}
+    else f.push("反転後の上昇局面");
+    if(Number.isFinite(reboundDD)&&reboundDD<=-10){s+=5;f.push("反発後に再調整")}
+  }else if(Number.isFinite(dd)){
+    if(dd<=-40)s-=35;else if(dd<=-25)s-=20;else if(dd<=-15)s-=8;
+  }
   const risk=Math.max(1,Math.min(10,Math.ceil(Math.max(0,s)/10)));
   const label=risk>=9?"全利確級":risk>=7?"強い利確警戒":risk>=5?"利確警戒":risk>=3?"注意":"上昇継続優勢";
   const cls=risk>=9?"risk-extreme":risk>=7?"risk-high":risk>=5?"risk-mid":"risk-low";
@@ -730,7 +756,11 @@ function calcAdjustmentProbability(d){
     else if(vol>=2.5 && c5>=20){p-=5;f.push("出来高伴う強い上昇")}
   }
   if(Number.isFinite(r)&&r>=80 && Number.isFinite(c5) && c5<5){p+=10;f.push("過熱後の伸び鈍化")}
-  if(Number.isFinite(dd)){
+  const rebound=Number(d.reboundPct ?? NaN);
+  if(Number.isFinite(rebound)&&rebound>=15){
+    if(rebound>=35){p+=6;f.push("反転起点から上昇継続")}
+    else f.push("反転後の回復局面");
+  }else if(Number.isFinite(dd)){
     if(dd<=-40){p-=30;f.push("調整済み")}
     else if(dd<=-25){p-=18;f.push("既に大幅調整")}
     else if(dd<=-15){p-=8;f.push("高値から調整中")}
@@ -776,6 +806,7 @@ function getTickerBackgroundComment(data){
   const risk=Number(data?.ceilingData?.risk);
   const rsi=Number(data?.rsi14 ?? data?.rsi);
   const dd=Number(data?.drawdown);
+  const rebound=Number(data?.reboundPct);
   const profiles={
     SNDK:"AI向けストレージ・NAND需要が追い風。上昇トレンドが崩れていなければ、短期の調整だけで急いで手放す局面ではない。",
     MU:"HBM・DRAMの需給改善とAIサーバー需要が成長を支える。過熱サインが弱ければ、MUのような長期上昇型はホールド優先。",
@@ -790,14 +821,21 @@ function getTickerBackgroundComment(data){
   };
   let base=profiles[sym]||"この銘柄固有の成長材料を背景に、短期指標と上昇トレンドの両方を見て判断。";
   const c5=Number(data?.change5), c10=Number(data?.change10);
+  // 旧最高値から大きく下げた後でも、底から十分に戻していれば「反転確認」とする。
+  // 反転確認後は旧最高値までの距離ではなく、反転後の上昇加速・過熱を優先して評価する。
+  const reversalConfirmed=Number.isFinite(rebound)&&rebound>=10&&((Number.isFinite(c5)&&c5>0)||(Number.isFinite(c10)&&c10>0));
   const strongRebound=Number.isFinite(c5)&&Number.isFinite(c10)&&c5>=8&&c10>=5;
-  const healthyRebound=Number.isFinite(dd)&&dd<=-10&&dd>-35&&strongRebound&&risk<5&&p<70;
-  const adjustmentInProgress=Number.isFinite(dd)&&dd<=-10&&dd>-35&&!healthyRebound;
+  const healthyRebound=reversalConfirmed&&strongRebound&&risk<5&&p<70;
+  const adjustmentInProgress=!reversalConfirmed&&Number.isFinite(dd)&&dd<=-10&&dd>-35;
   if(risk>=7 || p>=70 || (Number.isFinite(rsi)&&rsi>=80)){
     return `${base} 現在は過熱・天井サインが強く、今回は成長期待より利益保護を優先する局面。`;
   }
+  if(Number.isFinite(rebound)&&rebound>=10&&((Number.isFinite(c5)&&c5>0)||(Number.isFinite(c10)&&c10>0))){
+    if(rebound>=35) return `${base} 高値から大きく調整した後、底打ちからの反転を確認。。`;
+    return `${base} 高値から調整した後、反転を確認。現在は旧最高値までの距離より、反転後の上昇加速と過熱を重視する局面。`;
+  }
   if(Number.isFinite(dd)&&dd<=-35){
-    return `${base} 現在は高値から大きく調整済みのため、売却より反転確認を優先。`;
+    return `${base} 高値から大きく調整しており、反転確認前のため回復を優先。反転が確認された後は、その起点からの上昇・過熱を基準に天井を判定。`;
   }
   if(healthyRebound){
     return `${base} 現在は調整後の健全な反発を維持しており、上昇トレンドの回復を優先してホールド。`;
@@ -820,11 +858,13 @@ function renderPfRiskBlock(data){
   // 「追加調整」と「高値調整」を、単純な高値からの下落率だけで切り替えない。
   // 天井危険度が5以上なら、15%以上下落していても再び高値圏へ戻る局面として
   // 高値調整リスクを優先する。深い下落かつ天井サインが弱い場合だけ追加調整とする。
-  const deepCorrection=Number.isFinite(dd)&&dd<=-35;
+  const rebound=Number(data?.reboundPct);
   const c5=Number(data?.change5), c10=Number(data?.change10);
+  const reversalConfirmed=Number.isFinite(rebound)&&rebound>=10&&((Number.isFinite(c5)&&c5>0)||(Number.isFinite(c10)&&c10>0));
+  const deepCorrection=Number.isFinite(dd)&&dd<=-35&&!reversalConfirmed;
   const strongRebound=Number.isFinite(c5)&&Number.isFinite(c10)&&c5>=8&&c10>=5;
-  const healthyRebound=Number.isFinite(dd)&&dd<=-10&&dd>-35&&strongRebound&&c.risk<5&&p<70;
-  const adjustmentInProgress=Number.isFinite(dd)&&dd<=-10&&dd>-35&&!healthyRebound;
+  const healthyRebound=reversalConfirmed&&strongRebound&&c.risk<5&&p<70;
+  const adjustmentInProgress=!reversalConfirmed&&Number.isFinite(dd)&&dd<=-10&&dd>-35;
   let stateLevel=1, stateTitle="大幅調整後・回復確認", probabilityTitle="追加調整リスク", riskValue=p, contextLabel="売るより回復を待つ段階";
   if(c.risk>=7 || p>=70 || (Number.isFinite(data?.rsi14)&&data.rsi14>=80)){
     stateLevel=5; stateTitle="高値調整リスク"; probabilityTitle="高値調整リスク"; riskValue=Math.max(5,Math.min(95,Math.round((c.risk/10)*100))); contextLabel="天井圏・過熱。利確・利益保護を優先";
@@ -834,6 +874,8 @@ function renderPfRiskBlock(data){
     stateLevel=3; stateTitle="健全な反発維持"; probabilityTitle="調整入りリスク"; riskValue=p; contextLabel="調整後に反発中。上昇トレンド回復中";
   } else if(adjustmentInProgress){
     stateLevel=2; stateTitle="調整中"; probabilityTitle="追加調整リスク"; riskValue=p; contextLabel="調整からの回復中。底打ち・反発を確認する段階";
+  } else if(reversalConfirmed){
+    stateLevel=3; stateTitle="健全な反発維持"; probabilityTitle="調整入りリスク"; riskValue=p; contextLabel="調整後の反転を確認。旧最高値ではなく反転後の上昇を評価";
   } else if(!deepCorrection){
     stateLevel=3; stateTitle="健全な反発維持"; probabilityTitle="調整入りリスク"; riskValue=p; contextLabel="調整後に反発中。上昇トレンド回復中";
   }
