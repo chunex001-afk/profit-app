@@ -271,14 +271,12 @@ async function check(){
     document.getElementById("rsi").textContent=rsi.toFixed(1);
     document.getElementById("profit").textContent=`${profit>=0?"+":""}${profit.toFixed(1)}%`;
 
+    // 利確判定は取得単価・利益率ではなく、現在の株価指標だけで判定する。
     let j="🟢 ホールド", reason="";
-    if(profit>=100){j="🔴 40〜50%利確";reason="利益が+100%に到達。基本ルールでは元本回収を兼ねて大きめの利確。";}
-    else if(profit>=70 && rsi>=80){j="🔴 20〜30%利確";reason="+70〜80%以上かつRSI80以上。過熱が強いため利確を強めに検討。";}
-    else if(profit>=70){j="🟡 20%前後利確検討";reason="+70〜80%到達。強いトレンドなら保有継続も可能。";}
-    else if(profit>=40 && rsi>=80){j="🟡 20%利確検討";reason="+40〜50%以上かつRSI80以上。短期過熱を警戒。";}
-    else if(profit>=40 && rsi>=75){j="🟡 10〜20%利確検討";reason="+40〜50%以上かつRSI75〜80。過熱を確認。";}
-    else if(profit>=20 && rsi>=80){j="🟡 10%利確検討";reason="+20〜25%以上かつRSI80以上。強い上昇でも過熱を警戒。";}
-    else {reason="利益率とRSIだけでは強い利確シグナルなし。上昇トレンド継続なら保有優先。";}
+    if(rsi>=85){j="🔴 利確警戒";reason="RSI85以上。現在の株価が強く過熱しているため、取得単価に関係なく利益保護を優先。";}
+    else if(rsi>=80){j="🟠 利確警戒";reason="RSI80以上。現在の株価に過熱感があるため、取得単価に関係なく利確を検討。";}
+    else if(rsi>=75){j="🟡 調整警戒";reason="RSI75以上。上昇が過熱し始めているため、取得単価に関係なく調整リスクを警戒。";}
+    else {reason="現在の株価指標では強い利確シグナルなし。取得単価ではなく、株価のトレンドと過熱度を優先して判定。";}
 
     document.getElementById("judgement").textContent=j;
     document.getElementById("reason").textContent=reason;
@@ -552,7 +550,6 @@ function buildPfMetrics(sym, d, cost){
   else if(ceiling.risk>=8 && adjusted>=70) j="🔴 強い利確警戒";
   else if(ceiling.risk>=7) j="🟠 利確警戒";
   else if(ceiling.risk>=5 && adjusted>=60) j="🟡 調整警戒";
-  else if(profit>=100 && ceiling.risk<7) j="🟡 利益保護を検討";
 
   return {sym,j,price,rsi:f.rsi,rsi14:f.rsi,rsi14Prev:f.rsiPrev,rsiDelta:f.rsiDelta,
     profit,change5:f.change5,change10:f.change10,emaGap:f.emaGap,volumeRatio:f.volumeRatio,
