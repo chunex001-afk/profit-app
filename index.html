@@ -642,6 +642,25 @@ async function checkPF(){
       let reasonHtml=pt.reason||"";
       if(pt.partial) reasonHtml+=(reasonHtml?"<br>":"")+`<span style="color:#9a6700;font-weight:700">⚠️ 一部判定：${pt.partialNote}</span>`;
       m.innerHTML=reasonHtml||"&nbsp;";
+      const oldProgress=j.parentElement.querySelector(".pfUnlockProgress");
+      if(oldProgress) oldProgress.remove();
+      // 100%解除ロジック(第17段階)の進捗表示。100%表示のときだけ、既存デザインに合わせた
+      // 最小限のパネルで解除条件の到達状況を出す(50%/0%になったら表示しない)。
+      if(pt.pct===100 && pt.unlockProgress && pt.unlockProgress.progress){
+        const up=pt.unlockProgress.progress;
+        const rsiTxt=Number.isFinite(up.rsi)?up.rsi.toFixed(1):"-";
+        const emaTxt=up.aboveEma50?"終値がEMA50を上回っている":"終値がEMA50を下回っている";
+        const hiTxt=up.newHighToday?"更新":"未達";
+        const progEl=document.createElement("div");
+        progEl.className="pfUnlockProgress";
+        progEl.style.cssText="margin-top:6px;padding:8px 10px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;font-size:11px;line-height:1.65;color:#57606a";
+        progEl.innerHTML=`<b style="color:#24292f">解除条件の進捗</b><br>`+
+          `・RSI14：${rsiTxt} / 50　${up.rsiOk?"○達成":"未達"}<br>`+
+          `・EMA50：${emaTxt}<br>`+
+          `・条件成立：${up.streakDays}/3日<br>`+
+          `・20営業日高値更新：${hiTxt}`;
+        j.parentElement.appendChild(progEl);
+      }
       const old=j.parentElement.querySelector(".pfRiskBlock");
       if(old) old.remove();
       const block=document.createElement("div");
@@ -873,28 +892,36 @@ window.buildRecentStateHistory=buildRecentStateHistory;
    バックテストで、既存の30日/60日固定キャップでは正当なケース(高値からの急落)の
    捕捉率が低すぎる一方、無制限の監視は数ヶ月〜半年前の無関係な古いシグナルを
    引きずる(SNDK等)ことが確認されたため、この「新高値で延長する40営業日」方式を採用。 */
-function detectStaleAwareCrashSignal(vals){
+/* サイクル判定そのもの(⑤起点・新高値による40営業日延長・40営業日失効・急落+5営業日回復なしの
+   確定判定)は元のdetectStaleAwareCrashSignalから1文字も変えずにここへ切り出しただけ。
+   従来のcrashConfirmed/confirmedAtは元のまま(新高値・失効でリセットされる)残しつつ、
+   別途lastConfirmedAtという「一度確定したら失効・新高値では絶対にリセットされない」値も
+   同時に記録する。これは第17段階(100%解除フェーズ)が、40営業日サイクル自体の失効や
+   新高値によって100%/50%表示を消されないようにするための追加情報で、
+   cycleActive/crashConfirmed/windowEndの判定条件そのものには一切影響しない。 */
+function runCrashCycleScan(vals){
   const histExt = buildRecentStateHistory(vals, 300);
   if(!histExt.length) return null;
   const chron = histExt.slice().reverse(); // 過去→現在(今日)の時系列順に並べ直す
   const CAP_DAYS = 40;
   let cycleActive=false, day0Price=null, peakPrice=null, windowEnd=null;
-  let crashConfirmed=false;
+  let crashConfirmed=false, confirmedAt=null;
+  let lastConfirmedAt=null; // ここだけは失効・新高値でリセットしない(第17段階が使う)
   for(let i=0;i<chron.length;i++){
     const day = chron[i];
     if(cycleActive){
       if(day.price>peakPrice){
         peakPrice=day.price; windowEnd=i+CAP_DAYS; // 終値ベースの新高値で監視期限を延長
-        crashConfirmed=false; // 新高値=明確な回復とみなし、古い急落確定はここで解除する(引きずらない)
+        crashConfirmed=false; confirmedAt=null; // 新高値=明確な回復とみなし、古い急落確定はここで解除する(引きずらない)
       }
       if(i>windowEnd){
         // 40営業日、新高値の更新がないままサイクル失効。古いDay0は以後使用しない。
-        cycleActive=false; day0Price=null; peakPrice=null; windowEnd=null; crashConfirmed=false;
+        cycleActive=false; day0Price=null; peakPrice=null; windowEnd=null; crashConfirmed=false; confirmedAt=null;
       }
     }
     if(!cycleActive){
       if(day.state===5){
-        cycleActive=true; day0Price=day.price; peakPrice=day.price; windowEnd=i+CAP_DAYS; crashConfirmed=false;
+        cycleActive=true; day0Price=day.price; peakPrice=day.price; windowEnd=i+CAP_DAYS; crashConfirmed=false; confirmedAt=null;
       }
       continue;
     }
@@ -909,17 +936,123 @@ function detectStaleAwareCrashSignal(vals){
       }
       // 5営業日分のデータが揃っており、かつその間に基準価格まで回復できなかった場合のみ確定
       if(!recovered && (checkEnd-i)>=5){
-        crashConfirmed=true;
+        // confirmedAt/lastConfirmedAtは急落当日(i)ではなくcheckEnd(=5営業日後、100%が
+        // 最初に成立する日)を使う。iのままだと、5営業日の回復猶予期間そのものが
+        // 第17段階の解除条件の探索範囲に混入してしまう。
+        crashConfirmed=true; confirmedAt=checkEnd;
+        lastConfirmedAt=checkEnd;
       }
     }
   }
-  if(cycleActive && crashConfirmed){
+  return {cycleActive:cycleActive, crashConfirmed:crashConfirmed, confirmedAt:confirmedAt,
+    lastConfirmedAt:lastConfirmedAt};
+}
+window.runCrashCycleScan=runCrashCycleScan;
+
+function detectStaleAwareCrashSignal(vals){
+  const scan = runCrashCycleScan(vals);
+  if(!scan) return null;
+  if(scan.cycleActive && scan.crashConfirmed){
     return {pct:100,label:"本格下落確認(40営業日サイクル)",
-      reason:"⑤高値調整リスク後の40営業日サイクル内で1日-10%以上の急落が発生し、5営業日以内に基準価格まで回復できず"};
+      reason:"⑤高値調整リスク後の40営業日サイクル内で1日-10%以上の急落が発生し、5営業日以内に基準価格まで回復できず",
+      confirmedAt:scan.confirmedAt};
   }
   return null;
 }
 window.detectStaleAwareCrashSignal=detectStaleAwareCrashSignal;
+
+/* 第17段階の起点(Phase B): 40営業日サイクルが失効・新高値でリセットされても消えない、
+   直近で100%が確定した日を返すだけの関数。サイクルの判定ルール自体はrunCrashCycleScanの
+   ままなので、「いつ100%が確定するか」はPhase Aの40営業日サイクルに完全に従っている。
+   変わるのは「確定した後にそれをいつまで覚えているか」だけ。 */
+function findLatestCrashConfirmation(vals){
+  const scan = runCrashCycleScan(vals);
+  return scan ? scan.lastConfirmedAt : null;
+}
+window.findLatestCrashConfirmation=findLatestCrashConfirmation;
+
+/* 第17段階(Phase B): 100%の解除ロジック(バックテストv2で確定した条件のみを実装)。
+   ①〜⑥の判定・優先順位・利確率、runCrashCycleScanの40営業日サイクル判定そのものは
+   一切変更しない。lastConfirmedAt(findLatestCrashConfirmationが返す、失効・新高値でも
+   消えない100%確定日)より後の値動きだけを対象に、以下の2段階の解除だけを判定する
+   独立ロジック。40営業日サイクルのcycleActive/windowEnd/peakPriceは一切参照しないため、
+   Phase B開始後は新高値が出ても40営業日経過しても、G→H以外の理由では状態が変わらない。
+   ・100%→50%：RSI14が50以上、かつ終値がEMA50を上回る状態が3営業日連続で成立
+   ・50%→0%  ：その後、直近20営業日高値を終値で更新
+   RSI14単独では解除しない・EMA200は使わない、という検証結果をそのまま反映している。
+   RSI14・EMA50の計算は既存の未使用ヘルパーsimpleRsiFromCloses()/ema()をそのまま流用し、
+   新しい移動平均・RSIの計算式は増やさない。 */
+function computeHundredPercentUnlock(vals, lastConfirmedAt){
+  if(!Number.isFinite(lastConfirmedAt)) return null;
+  const histExt = buildRecentStateHistory(vals, 300);
+  if(!histExt.length) return null;
+  const chron = histExt.slice().reverse(); // 過去→現在(今日)の時系列順。runCrashCycleScanと同一の並び。
+  const prices = chron.map(function(d){ return d.price; });
+  const triggerPos = lastConfirmedAt; // chron内の位置(0=最古、大きいほど新しい)
+  const todayPos = chron.length-1;
+
+  function rsiAtPos(p){
+    if(p<14) return null;
+    const windowNewestFirst = prices.slice(p-14, p+1).slice().reverse(); // 15本、新しい→古い
+    return simpleRsiFromCloses(windowNewestFirst, 14);
+  }
+  function ema50AtPos(p){
+    // バックテスト(v2)は標準的な(全期間から収束させる)EMA50で検証しているため、
+    // 直近50本だけの窓ではなく、その日までの利用可能な全データ(最大300営業日)で計算する。
+    // 50本だけの窓だと初期化バイアスが残り、実測で最大3%程度EMA値がずれることを確認したため。
+    if(p<49) return null;
+    const windowNewestFirst = prices.slice(0, p+1).slice().reverse(); // 新しい→古い
+    return ema(windowNewestFirst, 50);
+  }
+  function hi20AtPos(p){
+    if(p<20) return null;
+    let hi=-Infinity;
+    for(let k=p-20;k<=p-1;k++){ if(prices[k]>hi) hi=prices[k]; }
+    return hi;
+  }
+
+  // ①100%→50%: confirmedAtの翌日以降、RSI14>=50かつ終値>EMA50が3営業日連続で成立した最初の日
+  let stage1Pos=null, streak=0;
+  for(let p=triggerPos+1; p<=todayPos; p++){
+    const rsi=rsiAtPos(p), e50=ema50AtPos(p);
+    const ok = Number.isFinite(rsi)&&rsi>=50 && Number.isFinite(e50)&&prices[p]>e50;
+    streak = ok ? streak+1 : 0;
+    if(streak>=3){ stage1Pos=p; break; }
+  }
+  // ②50%→0%: stage1Pos以降、直近20営業日高値を終値で更新した最初の日
+  let stage2Pos=null;
+  if(stage1Pos!=null){
+    for(let p=stage1Pos+1; p<=todayPos; p++){
+      const hi20=hi20AtPos(p);
+      if(Number.isFinite(hi20) && prices[p]>hi20){ stage2Pos=p; break; }
+    }
+  }
+
+  let pct=100;
+  if(stage2Pos!=null) pct=0;
+  else if(stage1Pos!=null) pct=50;
+
+  // 表示用: 今日時点の生数値と、confirmedAt以降で継続しているRSI50+EMA50の連続日数
+  const todayRsi=rsiAtPos(todayPos), todayEma50=ema50AtPos(todayPos);
+  const aboveEma50 = Number.isFinite(todayEma50)&&prices[todayPos]>todayEma50;
+  let todayStreak=0;
+  for(let p=todayPos; p>triggerPos; p--){
+    const rsi=rsiAtPos(p), e50=ema50AtPos(p);
+    const ok = Number.isFinite(rsi)&&rsi>=50 && Number.isFinite(e50)&&prices[p]>e50;
+    if(ok) todayStreak++; else break;
+  }
+  const hi20Today=hi20AtPos(todayPos);
+  const newHighToday = Number.isFinite(hi20Today)&&prices[todayPos]>hi20Today;
+
+  return {pct:pct, stage1Pos:stage1Pos, stage2Pos:stage2Pos, triggerPos:triggerPos,
+    progress:{
+      rsi:todayRsi, rsiOk:Number.isFinite(todayRsi)&&todayRsi>=50,
+      ema50:todayEma50, aboveEma50:aboveEma50,
+      streakDays:Math.min(todayStreak,3),
+      hi20:hi20Today, newHighToday:newHighToday
+    }};
+}
+window.computeHundredPercentUnlock=computeHundredPercentUnlock;
 
 function detectProfitTakingSignal(vals){
   const hist = buildRecentStateHistory(vals, 90);
@@ -1002,9 +1135,24 @@ function detectProfitTakingSignal(vals){
     }
   }
 
-  // ⑦本格下落確認(50%→100%、新高値で延長する40営業日サイクル)
-  const staleAware = detectStaleAwareCrashSignal(vals);
-  if(staleAware) signals.push(staleAware);
+  // ⑦本格下落確認(50%→100%、新高値で延長する40営業日サイクル)＋Phase B(100%解除ロジック)。
+  // Phase A(40営業日サイクル)は「いつ100%が確定するか」だけを決める。確定後は
+  // findLatestCrashConfirmationがcycleActive/windowEndの失効・新高値リセットの影響を受けない
+  // 確定日を返すため、100%/50%表示がサイクルの都合だけで消えることはない。
+  const lastConfirmedAt = findLatestCrashConfirmation(vals);
+  if(lastConfirmedAt!=null){
+    const unlock = computeHundredPercentUnlock(vals, lastConfirmedAt);
+    if(unlock && unlock.pct===50){
+      signals.push({pct:50,label:"本格下落確認・解除中(50%)",
+        reason:"RSI14が50以上かつ終値がEMA50を上回る状態が3営業日連続で成立したため、100%から50%へ解除",
+        unlockProgress:unlock});
+    }else if(unlock && unlock.pct===100){
+      signals.push({pct:100,label:"本格下落確認(40営業日サイクル)",
+        reason:"⑤高値調整リスク後の40営業日サイクル内で1日-10%以上の急落が発生し、5営業日以内に基準価格まで回復できず",
+        unlockProgress:unlock});
+    }
+    // unlock.pct===0(完全解除)の場合は他のシグナルの判定に委ねるため、このシグナルは追加しない。
+  }
 
   // ⑥EMA200 3日連続回復
   if(hist.length>3 &&
@@ -1018,7 +1166,7 @@ function detectProfitTakingSignal(vals){
   const partial = notes.length>0;
   const partialNote = notes.join(" / ");
   if(!signals.length){
-    return {pct:0,label:"ホールド",reason:"特段のリスクシグナルなし",signal:null,all:signals,partial:partial,partialNote:partialNote};
+    return {pct:0,label:"ホールド",reason:"特段のリスクシグナルなし",signal:null,all:signals,partial:partial,partialNote:partialNote,unlockProgress:null};
   }
   signals.sort(function(a,b){return b.pct-a.pct;});
   const top=signals[0];
@@ -1030,7 +1178,7 @@ function detectProfitTakingSignal(vals){
     reason = top.reason+"(同時該当："+others+")";
   }
   return {pct:top.pct, label: top.pct===0?"ホールド":top.label, reason:reason, signal:top.label, all:signals,
-          partial:partial, partialNote:partialNote};
+          partial:partial, partialNote:partialNote, unlockProgress: top.unlockProgress||null};
 }
 window.detectProfitTakingSignal=detectProfitTakingSignal;
 </script>
