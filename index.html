@@ -682,8 +682,15 @@ async function checkPF(){
         m.textContent="";
         return;
       }
-      j.textContent=x.j;
-      m.textContent=`$${x.price.toFixed(2)} / RSI ${x.rsi.toFixed(1)} / ${x.profit>=0?"+":""}${x.profit.toFixed(1)}%`;
+      // UI表示のみの変更: カード最上部は「🟢 ホールド」等の旧表示ではなく、
+      // 推奨利確率(0/30/50/100%、判定ロジックはprofitTakingのまま変更なし)を最も目立つ位置に表示する。
+      const pt=x.profitTaking||{pct:0,label:"ホールド",reason:"",partial:false,partialNote:""};
+      const ptIcon=pt.pct<=0?"🟢":(pt.pct>=100?"🔴":(pt.pct>=50?"🟠":"🟡"));
+      const ptText=pt.pct<=0?"利確不要":("推奨利確："+pt.pct+"%");
+      j.innerHTML=`<span style="font-size:19px">${ptIcon} ${ptText}</span>`;
+      let reasonHtml=pt.reason||"";
+      if(pt.partial) reasonHtml+=(reasonHtml?"<br>":"")+`<span style="color:#9a6700;font-weight:700">⚠️ 一部判定：${pt.partialNote}</span>`;
+      m.innerHTML=reasonHtml||"&nbsp;";
       const old=j.parentElement.querySelector(".pfRiskBlock");
       if(old) old.remove();
       const block=document.createElement("div");
@@ -1069,17 +1076,10 @@ function renderPfRiskBlock(data){
   const icon=c.risk>=9?"🔴":c.risk>=7?"🟠":c.risk>=5?"🟡":"🟢";
   const profitText=Number.isFinite(profit)?((profit>=0?"+":"")+profit.toFixed(1)+"%"):"未登録";
 
-  // 利確率シグナル(取得単価・含み益率は使用せず、株価チャート上のリスクのみで判定)
-  const pt = data.profitTaking || {pct:0,label:"ホールド",reason:"",signal:null};
-  const ptIcon = pt.pct<=0?"🟢":(pt.pct>=100?"🔴":(pt.pct>=50?"🟠":"🟡"));
-  const ptBg = pt.pct<=0?"#eaf8ee":(pt.pct>=100?"#ffe5e5":(pt.pct>=50?"#fff1e0":"#fff8c5"));
-  const ptColor = pt.pct<=0?"#1a7f37":(pt.pct>=100?"#a40e26":(pt.pct>=50?"#b35c00":"#9a6700"));
-  const ptLabel = pt.pct<=0?"ホールド":pt.label;
-  const ptLine = `<div class="pfProfitTaking" style="margin-bottom:6px;padding:8px 10px;border-radius:9px;font-weight:800;font-size:14px;background:${ptBg};color:${ptColor}">
-    ${ptIcon} ${ptLabel}${pt.pct>0?`　推奨利確：${pt.pct}%`:""}
-    ${pt.reason?`<div style="font-size:11px;font-weight:500;margin-top:3px;color:#57606a">${pt.reason}</div>`:""}
-    ${pt.partial?`<div style="font-size:11px;font-weight:700;margin-top:3px;color:#9a6700">⚠️ 一部判定：${pt.partialNote}</div>`:""}
-  </div>`;
+  // 推奨利確率・理由はカード最上部(pfj/pfm)に表示するため、ここでは重複表示しない。
+  // 価格・RSIの参考情報のみ、5段階評価のすぐ下に小さく表示する。
+  const rsiText = Number.isFinite(data?.rsi14)?data.rsi14.toFixed(1):(Number.isFinite(data?.rsi)?data.rsi.toFixed(1):"-");
+  const metaLine = `<div style="font-size:12px;color:#666;margin:2px 0 4px">$${Number.isFinite(data?.price)?data.price.toFixed(2):"-"} / RSI ${rsiText}</div>`;
 
   // 「追加調整」と「高値調整」を、単純な高値からの下落率だけで切り替えない。
   // 天井危険度が5以上なら、15%以上下落していても再び高値圏へ戻る局面として
@@ -1143,8 +1143,8 @@ function renderPfRiskBlock(data){
     : "";
 
   return `<div class="pfRiskBlock">
-    ${ptLine}
     <div class="pfTopLine"><strong>${icon} ${stateLevel}｜${stateTitle}</strong><strong>${probabilityTitle} ${riskValue}%</strong><span>購入価格から ${profitText}</span></div>
+    ${metaLine}
     <div>天井危険度：${c.risk}/10　／　${contextLabel}</div>
     ${warning?`<div class="profitRiskNotice warn"><b>⚠️ 利益率に関係なく警戒</b> — 株価指標が加熱しています。</div>`:""}
     <div class="pfRiskReasons"><b>天井要因：</b>${c.reasons.join(" / ")}</div>
