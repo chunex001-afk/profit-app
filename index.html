@@ -551,7 +551,7 @@ function buildPfMetrics(sym, d, cost){
   const vals=(d.values||[]).map(v=>({
     close:parseFloat(v.close), volume:parseFloat(v.volume)
   })).filter(v=>Number.isFinite(v.close));
-  if(vals.length<60) throw new Error("過去データが不足しています");
+  if(vals.length<15) throw new Error("過去データが不足しています(最低15日分の株価データが必要です)");
   const closes=vals.map(v=>v.close);
   const f=calcSeriesFeatures(vals,0);
   const climax=calcClimaxSignal(f);
@@ -893,9 +893,14 @@ window.buildRecentStateHistory=buildRecentStateHistory;
 
 function detectProfitTakingSignal(vals){
   const hist = buildRecentStateHistory(vals, 90);
-  if(!hist.length) return {pct:0,label:"ホールド",reason:"",signal:null,all:[]};
+  if(!hist.length) return {pct:0,label:"ホールド",reason:"",signal:null,all:[],partial:true,partialNote:"過去データが不足しているため判定できません"};
   const today = hist[0];
   const signals=[];
+  // データ不足で判定を保留したロジックのメモ(推測はせず、対象外である旨だけを記録する)
+  const notes=[];
+  if(!Number.isFinite(today.ema200Gap)){
+    notes.push("EMA200関連(③④⑥)は過去データ不足のため判定対象外");
+  }
 
   // ①⑤高値調整リスク
   if(today.state===5){
@@ -926,14 +931,25 @@ function detectProfitTakingSignal(vals){
     }
   }
 
-  // 現在のEMA200割れ継続期間と、割れた日の出来高を調べる
+  // 現在のEMA200割れ継続期間と、割れた日の出来高を調べる。
+  // 「本当に回復した日で止まった」のか「過去データが尽きて確認できなくなっただけ」なのかを区別し、
+  // 後者の場合は割れ開始日を推測せず、③④を判定対象外として扱う。
   let breakIdx=null;
+  let breakDataInsufficient=false;
   if(Number.isFinite(today.ema200Gap) && today.ema200Gap<0){
     let idx=0;
-    while(idx+1<hist.length && Number.isFinite(hist[idx+1].ema200Gap) && hist[idx+1].ema200Gap<0) idx++;
+    while(true){
+      if(idx+1>=hist.length) break; // 直近90日の走査範囲の端に到達(既存の仕様上の上限)
+      const nextGap = hist[idx+1].ema200Gap;
+      if(!Number.isFinite(nextGap)){ breakDataInsufficient=true; break; } // 過去データ不足でこれ以上遡れない
+      if(nextGap>=0) break; // 本当にEMA200を上回っていた日を発見(割れ開始日が確定)
+      idx++;
+    }
     breakIdx=idx;
   }
-  if(breakIdx!==null){
+  if(breakIdx!==null && breakDataInsufficient){
+    notes.push("EMA200割れの開始日が過去データ不足のため特定できず、③④は判定対象外");
+  } else if(breakIdx!==null){
     const breakVol = hist[breakIdx].volumeRatio;
     // ③EMA200割れ+出来高急増
     if(Number.isFinite(breakVol) && breakVol>=1.5){
@@ -965,8 +981,10 @@ function detectProfitTakingSignal(vals){
     signals.push({pct:0,label:"EMA200回復(3日連続)",reason:"EMA200を3日連続で回復、警戒解除"});
   }
 
+  const partial = notes.length>0;
+  const partialNote = notes.join(" / ");
   if(!signals.length){
-    return {pct:0,label:"ホールド",reason:"特段のリスクシグナルなし",signal:null,all:signals};
+    return {pct:0,label:"ホールド",reason:"特段のリスクシグナルなし",signal:null,all:signals,partial:partial,partialNote:partialNote};
   }
   signals.sort(function(a,b){return b.pct-a.pct;});
   const top=signals[0];
@@ -977,7 +995,8 @@ function detectProfitTakingSignal(vals){
     const others = signals.slice(1).map(function(s){return s.label+"："+s.reason;}).join("／");
     reason = top.reason+"(同時該当："+others+")";
   }
-  return {pct:top.pct, label: top.pct===0?"ホールド":top.label, reason:reason, signal:top.label, all:signals};
+  return {pct:top.pct, label: top.pct===0?"ホールド":top.label, reason:reason, signal:top.label, all:signals,
+          partial:partial, partialNote:partialNote};
 }
 window.detectProfitTakingSignal=detectProfitTakingSignal;
 </script>
@@ -1059,6 +1078,7 @@ function renderPfRiskBlock(data){
   const ptLine = `<div class="pfProfitTaking" style="margin-bottom:6px;padding:8px 10px;border-radius:9px;font-weight:800;font-size:14px;background:${ptBg};color:${ptColor}">
     ${ptIcon} ${ptLabel}${pt.pct>0?`　推奨利確：${pt.pct}%`:""}
     ${pt.reason?`<div style="font-size:11px;font-weight:500;margin-top:3px;color:#57606a">${pt.reason}</div>`:""}
+    ${pt.partial?`<div style="font-size:11px;font-weight:700;margin-top:3px;color:#9a6700">⚠️ 一部判定：${pt.partialNote}</div>`:""}
   </div>`;
 
   // 「追加調整」と「高値調整」を、単純な高値からの下落率だけで切り替えない。
