@@ -308,23 +308,29 @@ function getPF(){
   try{const x=JSON.parse(localStorage.getItem(PF_KEY)||"[]"); return Array.isArray(x)?x.slice(0,6):[];}catch(e){return [];}
 }
 function savePF(a){localStorage.setItem(PF_KEY,JSON.stringify(a.slice(0,6)));}
+// 購入日欄(日付入力+削除ボタン)だけを描画するヘルパー。renderPF()の初回描画と、
+// onPurchaseDateChange()でのピンポイント再描画の両方から呼ぶ(APIは一切呼ばない)。
+function renderDateRow(i, sym){
+  const purchase=sym?getPurchase(sym):null;
+  const dateVal=purchase?purchase.date:"";
+  return `<div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:11px;color:#666;margin:0;font-weight:400;white-space:nowrap">購入日</label>
+        <input type="date" style="width:auto;padding:5px;font-size:12px" id="pfdate${i}"
+          value="${dateVal}" ${sym?"":"disabled"} onchange="onPurchaseDateChange(${i},this.value)">
+        ${dateVal?`<button type="button" style="width:auto;padding:4px 8px;font-size:11px;margin:0;background:#e9e9ee;color:#111;border:1px solid #ccc;border-radius:8px" onclick="onPurchaseDateChange(${i},'')">削除</button>`:""}
+      </div>`;
+}
 function renderPF(){
   const syms=getSymbols(), pf=getPF(), el=document.getElementById("pfList");
   let rows="";
   for(let i=0;i<6;i++){
     const cur=pf[i]||"";
-    const purchase=cur?getPurchase(cur):null;
-    const dateVal=purchase?purchase.date:"";
     rows+=`<div class="pf-row">
       <select data-pf="${i}" onchange="pfChanged(${i},this.value)">
         <option value="">銘柄なし</option>${syms.map(x=>`<option value="${x}" ${x===cur?"selected":""}>${x}</option>`).join("")}
       </select>
-      <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:11px;color:#666;margin:0;font-weight:400;white-space:nowrap">購入日</label>
-        <input type="date" style="width:auto;padding:5px;font-size:12px" id="pfdate${i}"
-          value="${dateVal}" ${cur?"":"disabled"} onchange="onPurchaseDateChange(${i},this.value)">
-        ${dateVal?`<button type="button" style="width:auto;padding:4px 8px;font-size:11px;margin:0;background:#e9e9ee;color:#111;border:1px solid #ccc;border-radius:8px" onclick="onPurchaseDateChange(${i},'')">削除</button>`:""}
-      </div>
+      <div id="pfDateRow${i}">${renderDateRow(i,cur)}</div>
+      <div id="pfDateNotice${i}" class="small" style="color:#9a6700;font-weight:600"></div>
       <div><div id="pfj${i}" class="pf-judge">-</div><div id="pfm${i}" class="pf-meta">未判定</div></div>
     </div>`;
   }
@@ -337,16 +343,22 @@ function pfChanged(i,v){
 function onPurchaseDateChange(i,dateStr){
   const a=getPF(), sym=a[i];
   if(!sym) return;
+  // 購入日の設定・変更・削除はAPIを一切呼ばない: キャッシュの削除もcheckPF()の自動実行も
+  // 行わず、保存だけを行う(Twelve Data APIのクレジット消費を増やさないため)。
+  // 反映(購入時スナップショットの再計算・現在の推奨利確の再構築)は、ユーザーが
+  // 「6銘柄まとめて判定」を押した時にだけ行われる。
   if(!dateStr){ clearPurchase(sym); } else { setPurchaseDate(sym,dateStr); }
-  renderPF();
-  // 購入日を設定・変更・削除したら、そのticker分だけキャッシュを無効化して再判定させる
-  // (購入時スナップショットの計算・現在判定の再構築に、最新のvalsが必要なため)。
-  try{
-    const cache=loadPfCache();
-    delete cache[sym];
-    savePfCache(cache);
-  }catch(e){}
-  if(typeof checkPF==="function") checkPF();
+  // 行全体(renderPF())を再描画すると、pfj/pfm(前回の判定結果表示)が"-"/"未判定"に
+  // リセットされ「既存の判定結果が壊れる」ため、ここでは呼ばない。日付欄・削除ボタン・
+  // 案内文だけをピンポイントで更新する。
+  const dateRowEl=document.getElementById("pfDateRow"+i);
+  if(dateRowEl) dateRowEl.innerHTML=renderDateRow(i,sym);
+  const noticeEl=document.getElementById("pfDateNotice"+i);
+  if(noticeEl){
+    noticeEl.textContent = dateStr
+      ? "購入日を変更しました。反映するには「6銘柄まとめて判定」を押してください。"
+      : "購入日を削除しました。反映するには「6銘柄まとめて判定」を押してください。";
+  }
 }
 function openPF(i){const a=getPF(), sym=a[i];if(!sym)return;document.getElementById("symbol").value=sym;document.getElementById("symbol").dispatchEvent(new Event("change"));window.scrollTo({top:0,behavior:"smooth"});}
 function addTicker(){
@@ -671,6 +683,9 @@ async function checkPF(){
       const sym=a[i]||"";
       const j=document.getElementById("pfj"+i), m=document.getElementById("pfm"+i);
       if(!sym){j.textContent="銘柄なし";m.textContent="";return;}
+      // 「6銘柄まとめて判定」を押した=反映のタイミングなので、購入日変更の案内文を消す。
+      const dateNoticeEl=document.getElementById("pfDateNotice"+i);
+      if(dateNoticeEl) dateNoticeEl.textContent="";
       const x=results[sym];
       if(!x || x.error){
         j.textContent="⚠️ "+(x?.error||"取得エラー");
