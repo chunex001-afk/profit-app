@@ -273,6 +273,27 @@ async function check(){
 <script>
 const BASE_SYMBOLS=["SNDK","MU","CRDO","AXT","AEHR","NBIS","ALAB","PLTR","CRWD","BE"];
 const PF_KEY="takeprofit_pf_v1", CUSTOM_KEY="takeprofit_custom_symbols_v1";
+// 購入日機能(第18段階)のticker単位ストレージ。PFスロット番号には一切紐づけない
+// (スロットを入れ替えても別銘柄の購入日と混ざらないようにするため)。ここはrenderPF()の
+// 初回描画(このscriptブロックの末尾)より前に必要なため、下の第15段階ブロックではなく
+// ここで定義する。
+const PURCHASE_KEY="takeprofit_purchase_v1";
+function getPurchaseMap(){
+  try{return JSON.parse(localStorage.getItem(PURCHASE_KEY)||"{}")||{};}catch(e){return {};}
+}
+function savePurchaseMap(m){ localStorage.setItem(PURCHASE_KEY, JSON.stringify(m)); }
+function getPurchase(sym){ return sym ? (getPurchaseMap()[sym]||null) : null; }
+function setPurchaseDate(sym, dateStr){
+  const m=getPurchaseMap();
+  // 日付が変わった場合のみ再計算させるため、常にスナップショットをnullへリセットする。
+  m[sym]={date:dateStr, snapshotPct:null, snapshotLabel:null, snapshotSignal:null};
+  savePurchaseMap(m);
+}
+function clearPurchase(sym){
+  const m=getPurchaseMap();
+  delete m[sym];
+  savePurchaseMap(m);
+}
 function getCustom(){try{return JSON.parse(localStorage.getItem(CUSTOM_KEY)||"{}")||{};}catch(e){return {};}}
 function getSymbols(){
   const c=getCustom(); return BASE_SYMBOLS.concat(Object.keys(c)).filter((v,i,a)=>a.indexOf(v)===i);
@@ -292,10 +313,18 @@ function renderPF(){
   let rows="";
   for(let i=0;i<6;i++){
     const cur=pf[i]||"";
+    const purchase=cur?getPurchase(cur):null;
+    const dateVal=purchase?purchase.date:"";
     rows+=`<div class="pf-row">
       <select data-pf="${i}" onchange="pfChanged(${i},this.value)">
         <option value="">銘柄なし</option>${syms.map(x=>`<option value="${x}" ${x===cur?"selected":""}>${x}</option>`).join("")}
       </select>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:11px;color:#666;margin:0;font-weight:400;white-space:nowrap">購入日</label>
+        <input type="date" style="width:auto;padding:5px;font-size:12px" id="pfdate${i}"
+          value="${dateVal}" ${cur?"":"disabled"} onchange="onPurchaseDateChange(${i},this.value)">
+        ${dateVal?`<button type="button" style="width:auto;padding:4px 8px;font-size:11px;margin:0;background:#e9e9ee;color:#111;border:1px solid #ccc;border-radius:8px" onclick="onPurchaseDateChange(${i},'')">削除</button>`:""}
+      </div>
       <div><div id="pfj${i}" class="pf-judge">-</div><div id="pfm${i}" class="pf-meta">未判定</div></div>
     </div>`;
   }
@@ -303,6 +332,21 @@ function renderPF(){
 }
 function pfChanged(i,v){
   const a=getPF();a[i]=v;savePF(a);
+  renderPF();
+}
+function onPurchaseDateChange(i,dateStr){
+  const a=getPF(), sym=a[i];
+  if(!sym) return;
+  if(!dateStr){ clearPurchase(sym); } else { setPurchaseDate(sym,dateStr); }
+  renderPF();
+  // 購入日を設定・変更・削除したら、そのticker分だけキャッシュを無効化して再判定させる
+  // (購入時スナップショットの計算・現在判定の再構築に、最新のvalsが必要なため)。
+  try{
+    const cache=loadPfCache();
+    delete cache[sym];
+    savePfCache(cache);
+  }catch(e){}
+  if(typeof checkPF==="function") checkPF();
 }
 function openPF(i){const a=getPF(), sym=a[i];if(!sym)return;document.getElementById("symbol").value=sym;document.getElementById("symbol").dispatchEvent(new Event("change"));window.scrollTo({top:0,behavior:"smooth"});}
 function addTicker(){
@@ -505,7 +549,7 @@ function historicalAnalogProbability(vals, current){
 function buildPfMetrics(sym, d, cost){
   if(!d || d.status==="error") throw new Error(d?.message||"株価データがありません");
   const vals=(d.values||[]).map(v=>({
-    close:parseFloat(v.close), volume:parseFloat(v.volume)
+    close:parseFloat(v.close), volume:parseFloat(v.volume), date:v.datetime
   })).filter(v=>Number.isFinite(v.close));
   if(vals.length<15) throw new Error("過去データが不足しています(最低15日分の株価データが必要です)");
   const closes=vals.map(v=>v.close);
@@ -544,7 +588,7 @@ function buildPfMetrics(sym, d, cost){
     change5:f.change5,change10:f.change10,emaGap:f.emaGap,volumeRatio:f.volumeRatio,
     drawdown:f.drawdown,dd252:f.dd252,ema200Gap:f.ema200Gap,
     reboundPct:f.reboundPct,reboundPivot:f.reboundPivot,reboundHigh:f.reboundHigh,reboundHighDrawdown:f.reboundHighDrawdown,ceilingData:ceiling,adjustData:adj,riskData:adj,
-    adjustmentProbability:adjusted,analog,climax,profitTaking};
+    adjustmentProbability:adjusted,analog,climax,profitTaking,vals};
 }
 
 async function checkPF(){
@@ -633,15 +677,39 @@ async function checkPF(){
         m.textContent="";
         return;
       }
-      // UI表示のみの変更: カード最上部は「🟢 ホールド」等の旧表示ではなく、
-      // 推奨利確率(0/30/50/100%、判定ロジックはprofitTakingのまま変更なし)を最も目立つ位置に表示する。
-      const pt=x.profitTaking||{pct:0,label:"ホールド",reason:"",partial:false,partialNote:""};
-      const ptIcon=pt.pct<=0?"🟢":(pt.pct>=100?"🔴":(pt.pct>=50?"🟠":"🟡"));
-      const ptText=pt.pct<=0?"利確不要":("推奨利確："+pt.pct+"%");
-      j.innerHTML=`<span style="font-size:19px">${ptIcon} ${ptText}</span>`;
-      let reasonHtml=pt.reason||"";
-      if(pt.partial) reasonHtml+=(reasonHtml?"<br>":"")+`<span style="color:#9a6700;font-weight:700">⚠️ 一部判定：${pt.partialNote}</span>`;
-      m.innerHTML=reasonHtml||"&nbsp;";
+      // 購入日機能(第18段階): 購入日が設定されているtickerだけ、購入時/現在の推奨利確を
+      // 別々に表示する新しい分岐に入る。購入日が未設定の場合は、以下のelse節で
+      // 既存の表示ロジックを無改修のまま実行する(購入日なしモードを完全に維持するため)。
+      const purchaseInfo=getPurchase(sym);
+      let personalResult=null, snapshotInfo=null;
+      if(purchaseInfo && purchaseInfo.date && Array.isArray(x.vals)){
+        snapshotInfo=recordSnapshotIfNeeded(sym, x.vals);
+        personalResult=computePersonalProfitTaking(x.vals, purchaseInfo.date);
+      }
+      const pt=personalResult || x.profitTaking || {pct:0,label:"ホールド",reason:"",partial:false,partialNote:""};
+
+      if(personalResult){
+        const snapPct=(snapshotInfo && !snapshotInfo.snapshotError)?snapshotInfo.snapshotPct:null;
+        const snapText=(snapshotInfo && snapshotInfo.snapshotError)
+          ? snapshotInfo.snapshotError
+          : (Number.isFinite(snapPct)?(snapPct<=0?"利確不要":(snapPct+"%")):"-");
+        const curPct=personalResult.pct;
+        const curIcon=curPct<=0?"🟢":(curPct>=100?"🔴":(curPct>=50?"🟠":"🟡"));
+        const curText=curPct<=0?"利確不要":(curPct+"%");
+        j.innerHTML=`<div style="font-size:11px;color:#666">購入日：${purchaseInfo.date}</div>`+
+          `<div style="font-size:13px;color:#666;margin:2px 0 4px">購入時の推奨利確：${snapText}</div>`+
+          `<span style="font-size:19px">${curIcon} 現在の推奨利確：${curText}</span>`;
+        m.innerHTML=personalResult.reason||"&nbsp;";
+      }else{
+        // UI表示のみの変更: カード最上部は「🟢 ホールド」等の旧表示ではなく、
+        // 推奨利確率(0/30/50/100%、判定ロジックはprofitTakingのまま変更なし)を最も目立つ位置に表示する。
+        const ptIcon=pt.pct<=0?"🟢":(pt.pct>=100?"🔴":(pt.pct>=50?"🟠":"🟡"));
+        const ptText=pt.pct<=0?"利確不要":("推奨利確："+pt.pct+"%");
+        j.innerHTML=`<span style="font-size:19px">${ptIcon} ${ptText}</span>`;
+        let reasonHtml=pt.reason||"";
+        if(pt.partial) reasonHtml+=(reasonHtml?"<br>":"")+`<span style="color:#9a6700;font-weight:700">⚠️ 一部判定：${pt.partialNote}</span>`;
+        m.innerHTML=reasonHtml||"&nbsp;";
+      }
       const oldProgress=j.parentElement.querySelector(".pfUnlockProgress");
       if(oldProgress) oldProgress.remove();
       // 100%解除ロジック(第17段階)の進捗表示。100%表示のときだけ、既存デザインに合わせた
@@ -1181,6 +1249,291 @@ function detectProfitTakingSignal(vals){
           partial:partial, partialNote:partialNote, unlockProgress: top.unlockProgress||null};
 }
 window.detectProfitTakingSignal=detectProfitTakingSignal;
+
+/* 第18段階: 購入日機能。①〜⑦の判定・buildRecentStateHistory・runCrashCycleScan・
+   computeHundredPercentUnlock・detectProfitTakingSignalは1行も変更しない。
+   ticker単位で保存された購入日をもとに、「個人用利確サイクル」を独立に計算する新規ロジックのみを追加する。
+   購入日が未設定のticker・呼び出しには一切影響しない(checkPF側で無改修の既存分岐をそのまま通す)。
+
+   設計方針:
+   ・「購入時の推奨利確」は既存detectProfitTakingSignalを無改修のまま、
+     vals.slice(purchaseIndex)(購入日をasOf基準にした部分列)に対して呼ぶだけで実現する。
+     計算は購入日設定時に1回だけ行い、以後は固定保存する(日付変更時のみ再計算)。
+   ・「現在の推奨利確」は、購入日より前を起点探索の対象にしない(②t0Idx/basisB、③④breakIdx、
+     ⑤再天井の過去サイクル、⑦Day0)。加えて、⑤(state===5)・⑦(Day0の条件が同じstate===5)は、
+     購入日時点で条件がすでに成立していた場合、一度「state<5」を経て解除されるまで新規シグナルと
+     扱わない(グレースフル・クリア)。③④も同じ考え方をEMA200回復(ema200Gap>=0)で適用する。
+     ⑥(EMA200 3日連続回復→0%)はグレースフル・クリア対象外とし、既存ロジックのまま
+     購入日前のデータを含めて判定してよい(0%方向の解除シグナルであり引き継ぎのリスクがないため)。
+   ・指標計算(RSI・EMA50・EMA200・60日高値・252日高値等)は常に購入日より前のデータも含めた
+     全履歴から行う。切り詰められるのは「シグナルの起点探索」の範囲だけ。 */
+
+function findPurchaseIndex(vals, dateStr){
+  if(!dateStr || !Array.isArray(vals)) return null;
+  for(let i=0;i<vals.length;i++){
+    if(vals[i].date && vals[i].date<=dateStr) return i;
+  }
+  return null;
+}
+window.findPurchaseIndex=findPurchaseIndex;
+
+// 購入時の推奨利確: 購入日設定時に1回だけ計算し、以後は固定保存する(日付変更時のみ上書き)。
+// 既存detectProfitTakingSignalを無改修のまま、購入日をasOf基準にした部分列で呼ぶだけ。
+function recordSnapshotIfNeeded(sym, vals){
+  const m=getPurchaseMap();
+  const info=m[sym];
+  if(!info) return null;
+  if(info.snapshotPct==null && !info.snapshotError){
+    const idx=findPurchaseIndex(vals, info.date);
+    if(idx==null){
+      info.snapshotError="購入日のデータが取得範囲外です(直近365日のみ利用可能)";
+    }else{
+      const snap=detectProfitTakingSignal(vals.slice(idx));
+      info.snapshotPct=snap.pct; info.snapshotLabel=snap.label; info.snapshotSignal=snap.signal;
+    }
+    m[sym]=info; savePurchaseMap(m);
+  }
+  return info;
+}
+window.recordSnapshotIfNeeded=recordSnapshotIfNeeded;
+
+/* ⑦のDay0探索を、既存runCrashCycleScanと同一のロジックで、
+   (a)購入日以降のchronB配列だけを対象にし、(b)Day0の条件にグレースフル・クリア
+   (eligState5[i]===true、購入日時点で⑤が継続中でないこと)を追加しただけの版。
+   それ以外(新高値での40営業日延長・40営業日失効・-10%+5営業日回復なしでの確定・
+   lastConfirmedAtが失効/新高値でリセットされない、という各性質)は元のロジックと同一。 */
+function runCrashCycleScanBounded(chronB, eligState5){
+  if(!chronB || !chronB.length) return null;
+  const CAP_DAYS=40;
+  let cycleActive=false, peakPrice=null, windowEnd=null;
+  let crashConfirmed=false, confirmedAt=null, lastConfirmedAt=null;
+  for(let i=0;i<chronB.length;i++){
+    const day=chronB[i];
+    if(cycleActive){
+      if(day.price>peakPrice){ peakPrice=day.price; windowEnd=i+CAP_DAYS; crashConfirmed=false; confirmedAt=null; }
+      if(i>windowEnd){ cycleActive=false; peakPrice=null; windowEnd=null; crashConfirmed=false; confirmedAt=null; }
+    }
+    if(!cycleActive){
+      if(day.state===5 && eligState5[i]){
+        cycleActive=true; peakPrice=day.price; windowEnd=i+CAP_DAYS; crashConfirmed=false; confirmedAt=null;
+      }
+      continue;
+    }
+    if(i===0) continue; // chronBの先頭(=購入日)には比較対象の前日がないためスキップ
+    const prevPrice=chronB[i-1].price;
+    const dailyRet=(Number.isFinite(prevPrice)&&prevPrice>0)?(day.price/prevPrice-1)*100:null;
+    if(dailyRet!=null && dailyRet<=-10){
+      let recovered=false;
+      const checkEnd=Math.min(i+5, chronB.length-1);
+      for(let j=i+1;j<=checkEnd;j++){ if(chronB[j].price>=prevPrice){recovered=true;break;} }
+      if(!recovered && (checkEnd-i)>=5){ crashConfirmed=true; confirmedAt=checkEnd; lastConfirmedAt=checkEnd; }
+    }
+  }
+  return {cycleActive:cycleActive, crashConfirmed:crashConfirmed, confirmedAt:confirmedAt, lastConfirmedAt:lastConfirmedAt};
+}
+window.runCrashCycleScanBounded=runCrashCycleScanBounded;
+
+/* 既存computeHundredPercentUnlockと完全に同一のロジック(RSI50+EMA50の3営業日連続→50%、
+   その後20営業日高値更新→0%)。唯一の違いは、内部で使うprices配列を「購入日以降だけに
+   切り詰めない」こと(EMA50は全期間から収束させる必要があるため、既存コードのコメント通り)。
+   triggerPosFull(=購入日基準で見つけたlastConfirmedAtを、全履歴chronFull基準の位置に
+   変換した値)より後だけを解除条件の探索対象にする。 */
+function computeHundredPercentUnlockBounded(chronFull, triggerPosFull){
+  if(!Number.isFinite(triggerPosFull)) return null;
+  const prices=chronFull.map(function(d){return d.price;});
+  const triggerPos=triggerPosFull;
+  const todayPos=chronFull.length-1;
+  function rsiAtPos(p){
+    if(p<14) return null;
+    const windowNewestFirst=prices.slice(p-14,p+1).slice().reverse();
+    return simpleRsiFromCloses(windowNewestFirst,14);
+  }
+  function ema50AtPos(p){
+    if(p<49) return null;
+    const windowNewestFirst=prices.slice(0,p+1).slice().reverse();
+    return ema(windowNewestFirst,50);
+  }
+  function hi20AtPos(p){
+    if(p<20) return null;
+    let hi=-Infinity;
+    for(let k=p-20;k<=p-1;k++){ if(prices[k]>hi) hi=prices[k]; }
+    return hi;
+  }
+  let stage1Pos=null, streak=0;
+  for(let p=triggerPos+1;p<=todayPos;p++){
+    const rsi=rsiAtPos(p), e50=ema50AtPos(p);
+    const ok=Number.isFinite(rsi)&&rsi>=50 && Number.isFinite(e50)&&prices[p]>e50;
+    streak=ok?streak+1:0;
+    if(streak>=3){ stage1Pos=p; break; }
+  }
+  let stage2Pos=null;
+  if(stage1Pos!=null){
+    for(let p=stage1Pos+1;p<=todayPos;p++){
+      const hi20=hi20AtPos(p);
+      if(Number.isFinite(hi20) && prices[p]>hi20){ stage2Pos=p; break; }
+    }
+  }
+  let pct=100;
+  if(stage2Pos!=null) pct=0;
+  else if(stage1Pos!=null) pct=50;
+  const todayRsi=rsiAtPos(todayPos), todayEma50=ema50AtPos(todayPos);
+  const aboveEma50=Number.isFinite(todayEma50)&&prices[todayPos]>todayEma50;
+  let todayStreak=0;
+  for(let p=todayPos; p>triggerPos; p--){
+    const rsi=rsiAtPos(p), e50=ema50AtPos(p);
+    const ok=Number.isFinite(rsi)&&rsi>=50 && Number.isFinite(e50)&&prices[p]>e50;
+    if(ok) todayStreak++; else break;
+  }
+  const hi20Today=hi20AtPos(todayPos);
+  const newHighToday=Number.isFinite(hi20Today)&&prices[todayPos]>hi20Today;
+  return {pct:pct, stage1Pos:stage1Pos, stage2Pos:stage2Pos, triggerPos:triggerPos,
+    progress:{
+      rsi:todayRsi, rsiOk:Number.isFinite(todayRsi)&&todayRsi>=50,
+      ema50:todayEma50, aboveEma50:aboveEma50,
+      streakDays:Math.min(todayStreak,3),
+      hi20:hi20Today, newHighToday:newHighToday
+    }};
+}
+window.computeHundredPercentUnlockBounded=computeHundredPercentUnlockBounded;
+
+// 現在の推奨利確: 購入日を個人用利確サイクルの起点とする。既存の①〜⑦の優先順位(最大値採用)は
+// そのまま踏襲し、各シグナルの「起点探索」だけを購入日以降に制限し、⑤/⑦/③④にはグレースフル・
+// クリアを適用する。⑥だけは対象外(既存ロジックのまま、購入日前のデータを含めてよい)。
+function computePersonalProfitTaking(vals, purchaseDateStr){
+  if(!purchaseDateStr) return null;
+  const purchaseIndex=findPurchaseIndex(vals, purchaseDateStr);
+  if(purchaseIndex==null){
+    return {pct:0,label:"判定不可",reason:"購入日のデータが取得範囲外です(直近365日のみ利用可能)",signal:null,all:[],insufficientData:true};
+  }
+  if(purchaseIndex===0){
+    // 購入日当日は現在の推奨利確を0%(利確不要)として扱う。
+    return {pct:0,label:"ホールド",reason:"購入日当日のため利確判定なし",signal:null,all:[],purchaseIndex:purchaseIndex};
+  }
+  const neededLookback=Math.max(300, purchaseIndex+10);
+  const hist=buildRecentStateHistory(vals, neededLookback); // 既存関数を無改修で流用
+  if(!hist.length || purchaseIndex>=hist.length){
+    return {pct:0,label:"判定不可",reason:"購入日時点のデータが不足しています",signal:null,all:[],insufficientData:true,purchaseIndex:purchaseIndex};
+  }
+  const chronFull=hist.slice().reverse(); // 過去->現在(今日)。既存runCrashCycleScanと同じ並び
+  const purchasePos=chronFull.length-1-purchaseIndex;
+  const todayPosFull=chronFull.length-1;
+  const chronB=chronFull.slice(purchasePos); // 購入日(含む)以降のみ。過去->現在
+
+  // ---- グレースフル・クリア: 購入日(含む)以降を走査 ----
+  let graceState5=chronB[0].state<5;
+  let graceEma200=!(Number.isFinite(chronB[0].ema200Gap) && chronB[0].ema200Gap<0);
+  const eligState5=[graceState5], eligEma200=[graceEma200];
+  for(let k=1;k<chronB.length;k++){
+    if(chronB[k].state<5) graceState5=true;
+    eligState5.push(graceState5);
+    if(Number.isFinite(chronB[k].ema200Gap) && chronB[k].ema200Gap>=0) graceEma200=true;
+    eligEma200.push(graceEma200);
+  }
+  const todayB=chronB.length-1;
+  const today=chronB[todayB];
+  const signals=[];
+
+  // ①個人用⑤(高値調整リスク)
+  if(today.state===5 && eligState5[todayB]){
+    signals.push({pct:50,label:"高値調整リスク",reason:"購入後に新規発生した⑤(高値調整リスク)"});
+  }
+
+  // 新しい->古い(購入日まで)のビュー。②③④⑤再天井の探索に使う(元のhistベースの検索と同じ形)。
+  const hb=chronB.slice().reverse(); // hb[0]=今日 ... hb[last]=購入日
+
+  // ②個人用t0Idx/basisB(購入日より前は参照しない)
+  let t0Idx=null;
+  for(let idx=0; idx<hb.length-1; idx++){
+    if(hb[idx].state===3 && hb[idx+1].state===5){ t0Idx=idx; break; }
+  }
+  let basisB=null;
+  if(t0Idx!==null){
+    let s5Idx=t0Idx+1;
+    while(s5Idx+1<hb.length && hb[s5Idx+1].state===5) s5Idx++;
+    let maxP=-Infinity;
+    for(let j=t0Idx+1;j<=s5Idx;j++){ if(hb[j].price>maxP) maxP=hb[j].price; }
+    basisB=(maxP>-Infinity)?maxP:null;
+  }
+  if(t0Idx!==null && basisB && t0Idx<=60){
+    const declineFromHigh=(today.price/basisB-1)*100;
+    if(declineFromHigh<=-8 && Number.isFinite(today.rsiDelta) && today.rsiDelta<=-10 &&
+       Number.isFinite(today.volumeRatio) && today.volumeRatio<1.0 &&
+       Number.isFinite(today.ema200Gap) && today.ema200Gap>=0){
+      signals.push({pct:100,label:"静かな悪化",reason:"購入後の高値から-8%以上下落・RSI急低下・出来高低下・EMA200は維持"});
+    }
+  }
+
+  // ③④個人用EMA200割れ(グレースフル・クリア済みの場合のみ新規カウントを開始)
+  if(Number.isFinite(today.ema200Gap) && today.ema200Gap<0 && eligEma200[todayB]){
+    let idx=0, insufficient=false;
+    while(true){
+      if(idx+1>=hb.length){ insufficient=true; break; } // 購入日境界に到達(それ以前は参照しない)
+      const nextGap=hb[idx+1].ema200Gap;
+      if(!Number.isFinite(nextGap)){ insufficient=true; break; }
+      if(nextGap>=0) break;
+      idx++;
+    }
+    if(!insufficient){
+      const breakVol=hb[idx].volumeRatio;
+      if(Number.isFinite(breakVol) && breakVol>=1.5){
+        signals.push({pct:100,label:"EMA200割れ+出来高急増",reason:"購入後にEMA200を出来高急増を伴って割り込み"});
+      }
+      if(idx>=5){
+        signals.push({pct:50,label:"EMA200未回復("+idx+"日)",reason:"購入後のEMA200割れから一定期間、回復できていない"});
+      }
+    }
+  }
+
+  // ⑤再天井(⑤→③→⑤): 購入日以降の過去サイクルのみ参照
+  if(today.state===5 && hb.length>1 && hb[1].state!==5 && eligState5[todayB]){
+    let priorCycle=false;
+    for(let idx=1; idx<hb.length-1; idx++){
+      if(hb[idx].state===3 && hb[idx+1].state===5){ priorCycle=true; break; }
+    }
+    if(priorCycle){
+      signals.push({pct:50,label:"再天井(⑤→③→⑤)",reason:"購入後、⑤→③の後に再び⑤に戻った"});
+    }
+  }
+
+  // ⑦(グレース対応Day0 + 既存Phase Bロジックをそのまま流用)
+  const scan=runCrashCycleScanBounded(chronB, eligState5);
+  if(scan && scan.cycleActive && scan.crashConfirmed){
+    let unlock=null;
+    if(scan.lastConfirmedAt!=null){
+      const triggerPosFull=purchasePos+scan.lastConfirmedAt;
+      unlock=computeHundredPercentUnlockBounded(chronFull, triggerPosFull);
+    }
+    if(unlock && unlock.pct===50){
+      signals.push({pct:50,label:"本格下落確認・解除中(50%)",
+        reason:"購入後の下落確認から、RSI回復・EMA50上抜けで100%から50%へ解除",unlockProgress:unlock});
+    }else if(unlock && unlock.pct===100){
+      signals.push({pct:100,label:"本格下落確認(40営業日サイクル)",
+        reason:"購入後に新規発生した⑤を起点とした40営業日サイクル内で本格下落を確認",unlockProgress:unlock});
+    }else if(!unlock){
+      signals.push({pct:100,label:"本格下落確認(40営業日サイクル)",
+        reason:"購入後に新規発生した⑤を起点とした40営業日サイクル内で本格下落を確認"});
+    }
+  }
+
+  // ⑥EMA200 3日連続回復(グレースフル・クリア対象外。購入日前のデータを含む既存ロジックのまま、
+  // chronFull=全履歴基準で判定する)。
+  if(todayPosFull>=3 &&
+     Number.isFinite(chronFull[todayPosFull].ema200Gap)&&chronFull[todayPosFull].ema200Gap>=0 &&
+     Number.isFinite(chronFull[todayPosFull-1].ema200Gap)&&chronFull[todayPosFull-1].ema200Gap>=0 &&
+     Number.isFinite(chronFull[todayPosFull-2].ema200Gap)&&chronFull[todayPosFull-2].ema200Gap>=0 &&
+     Number.isFinite(chronFull[todayPosFull-3].ema200Gap)&&chronFull[todayPosFull-3].ema200Gap<0){
+    signals.push({pct:0,label:"EMA200回復(3日連続)",reason:"EMA200を3日連続で回復、警戒解除"});
+  }
+
+  if(!signals.length){
+    return {pct:0,label:"ホールド",reason:"購入後に新規の利確シグナルなし",signal:null,all:[],purchaseIndex:purchaseIndex};
+  }
+  signals.sort(function(a,b){return b.pct-a.pct;});
+  const top=signals[0];
+  return {pct:top.pct, label: top.pct===0?"ホールド":top.label, reason:top.reason, signal:top.label, all:signals,
+    purchaseIndex:purchaseIndex, unlockProgress: top.unlockProgress||null};
+}
+window.computePersonalProfitTaking=computePersonalProfitTaking;
 </script>
 
 
