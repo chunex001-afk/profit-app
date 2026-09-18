@@ -4,7 +4,13 @@
 // browser that still has the old "rikaku-app-v1" worker installed self-heal
 // as soon as it picks up this file (browsers periodically re-check an
 // active registration's script in the background even without a fresh
-// register() call from the page).
+// register() call from the page). Activation does NOT force-reload open
+// tabs: this app only calls the (rate-limited) stock API on an explicit
+// button press, and an unexpected reload could abort an in-flight request
+// after the API already billed it, prompting the user to retry and double
+// their credit usage. clients.claim() + the network-first fetch handler are
+// enough: the next normal navigation/reload in that tab already gets the
+// latest index.html, with no forced interruption of the current page.
 const CACHE_NAME = 'rikaku-app-v2';
 const APP_SHELL = [
   './',
@@ -32,10 +38,6 @@ self.addEventListener('activate', event => {
     caches.keys()
       .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
-      .then(() => self.clients.matchAll({ type: 'window' }))
-      .then(clients => clients.forEach(client => {
-        try { client.navigate(client.url); } catch (e) {}
-      }))
   );
 });
 
