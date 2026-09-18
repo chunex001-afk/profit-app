@@ -77,6 +77,13 @@ button{background:#111;color:#fff;border:0;font-weight:700;margin-top:12px}
 }
 .pfRiskReasons{font-size:11px !important}
 .profitRiskNotice{margin-top:5px}
+.profitRiskNotice.caution{color:#9a6700}
+.pfLongTerm{margin-top:5px;color:#8b949e}
+.pfLongTerm summary{cursor:pointer;font-size:11px;list-style:none}
+.pfLongTerm summary::-webkit-details-marker{display:none}
+.pfLongTerm summary::before{content:"▸ ";}
+.pfLongTerm[open] summary::before{content:"▾ ";}
+.pfLongTerm .pfRiskReasons{margin-top:3px}
 @media(max-width:700px){
   #pf2colGrid .pfRiskBlock{padding:8px !important}
   #pf2colGrid .pfRiskBlock strong{font-size:13px !important}
@@ -1610,34 +1617,36 @@ function renderPfRiskBlock(data){
     contextLabel="調整からの回復中。底打ち・反発を確認する段階";
   } else if(reversalConfirmed){
     stateLevel=3; stateTitle="健全な反発維持"; probabilityTitle="調整入りリスク"; riskValue=p;
-    contextLabel="調整後の反転を確認。旧最高値ではなく反転後の上昇を評価";
+    contextLabel="調整後の反転を確認";
   } else if(!deepCorrection){
     stateLevel=3; stateTitle="健全な反発維持"; probabilityTitle="調整入りリスク"; riskValue=p;
     contextLabel="調整後に反発中。上昇トレンド回復中";
   }
 
-  if(longTermUptrendBuffer && stateLevel<5){
-    contextLabel+="／長期上昇トレンド（200日EMA比+"+ema200Gap.toFixed(1)+"%）を考慮し軽い調整では格上げを抑制";
-  }
-  // score==3（moderate）は段階そのものは変更せず、注記としてのみ表示する。
-  if(climax.level==="moderate"){
-    contextLabel+="／過熱の兆候あり・要観察（"+climax.hits.join("・")+"）";
+  // 利確判断に関わる注意材料は、リスクが実際に高まっている時だけまとめて表示する。
+  // （表示の整理のみ：ステージ／数値ロジックはここでは変更しない）
+  let cautionHtml="";
+  if(c.risk>=7){
+    const why=c.reasons.length?c.reasons.join(" / "):"株価指標が加熱しています。";
+    cautionHtml=`<div class="profitRiskNotice warn"><b>⚠️ 警戒：</b>${why}</div>`;
+  } else if(c.risk>=5){
+    cautionHtml=`<div class="profitRiskNotice caution"><b>⚠ 注意材料：</b>${c.reasons.join(" / ")}</div>`;
+  } else if(climax.level==="moderate"){
+    cautionHtml=`<div class="profitRiskNotice caution"><b>⚠ 注意材料：</b>過熱の兆候あり・要観察（${climax.hits.join("・")}）</div>`;
   }
 
-  const warning=c.risk>=7;
-  const ceilingState=stateLevel>=4;
-
+  const longTermNote=(longTermUptrendBuffer && stateLevel<5)
+    ? `長期上昇トレンドを考慮し、軽い調整では格上げを抑制しています。`
+    : "";
   const longTermLine = (Number.isFinite(dd252)||Number.isFinite(ema200Gap))
-    ? `<div class="pfRiskReasons"><b>長期参照：</b>252日高値比 ${Number.isFinite(dd252)?dd252.toFixed(1)+"%":"-"}　／　200日EMA比 ${Number.isFinite(ema200Gap)?((ema200Gap>=0?"+":"")+ema200Gap.toFixed(1)+"%"):"-"}</div>`
+    ? `<details class="pfLongTerm"><summary>長期参照</summary><div class="pfRiskReasons">252日高値比 ${Number.isFinite(dd252)?dd252.toFixed(1)+"%":"-"}　／　200日EMA比 ${Number.isFinite(ema200Gap)?((ema200Gap>=0?"+":"")+ema200Gap.toFixed(1)+"%"):"-"}${longTermNote?`<br>${longTermNote}`:""}</div></details>`
     : "";
 
   return `<div class="pfRiskBlock">
     <div class="pfTopLine"><strong>${icon} ${stateLevel}｜${stateTitle}</strong><strong>${probabilityTitle} ${riskValue}%</strong></div>
     ${metaLine}
     <div>天井危険度：${c.risk}/10　／　${contextLabel}</div>
-    ${warning?`<div class="profitRiskNotice warn"><b>⚠️ 警戒</b> — 株価指標が加熱しています。</div>`:""}
-    <div class="pfRiskReasons"><b>天井要因：</b>${c.reasons.join(" / ")}</div>
-    <div class="pfRiskReasons"><b>${ceilingState?"天井":"追加調整"}要因：</b>${a.reasons.join(" / ")}</div>
+    ${cautionHtml}
     ${longTermLine}
   </div>`;
 }
