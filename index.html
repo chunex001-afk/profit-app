@@ -160,8 +160,8 @@ button[data-action="detail"] {
 </div>
 
 <div class="card">
-<button onclick="checkPF()" style="font-size:18px;padding:16px;margin-top:0">📊 6銘柄をまとめて判定</button>
-<b>📊 PF判定一覧（最大6銘柄）</b>
+<button onclick="checkPF()" style="font-size:18px;padding:16px;margin-top:0">📊 8銘柄をまとめて判定</button>
+<b>📊 PF判定一覧（最大8銘柄）</b>
 <p class="small">使わない枠は「銘柄なし」。保存しておけば次回も同じPFで表示します。</p>
 <div id="pfList"></div>
 </div>
@@ -312,9 +312,9 @@ function populateAllSymbolSelects(){
   if(syms.includes(old)) main.value=old;
 }
 function getPF(){
-  try{const x=JSON.parse(localStorage.getItem(PF_KEY)||"[]"); return Array.isArray(x)?x.slice(0,6):[];}catch(e){return [];}
+  try{const x=JSON.parse(localStorage.getItem(PF_KEY)||"[]"); return Array.isArray(x)?x.slice(0,8):[];}catch(e){return [];}
 }
-function savePF(a){localStorage.setItem(PF_KEY,JSON.stringify(a.slice(0,6)));}
+function savePF(a){localStorage.setItem(PF_KEY,JSON.stringify(a.slice(0,8)));}
 // 購入日欄(日付入力+削除ボタン)だけを描画するヘルパー。renderPF()の初回描画と、
 // onPurchaseDateChange()でのピンポイント再描画の両方から呼ぶ(APIは一切呼ばない)。
 function renderDateRow(i, sym){
@@ -330,7 +330,7 @@ function renderDateRow(i, sym){
 function renderPF(){
   const syms=getSymbols(), pf=getPF(), el=document.getElementById("pfList");
   let rows="";
-  for(let i=0;i<6;i++){
+  for(let i=0;i<8;i++){
     const cur=pf[i]||"";
     rows+=`<div class="pf-row">
       <select data-pf="${i}" onchange="pfChanged(${i},this.value)">
@@ -353,7 +353,7 @@ function onPurchaseDateChange(i,dateStr){
   // 購入日の設定・変更・削除はAPIを一切呼ばない: キャッシュの削除もcheckPF()の自動実行も
   // 行わず、保存だけを行う(Twelve Data APIのクレジット消費を増やさないため)。
   // 反映(購入時スナップショットの再計算・現在の推奨利確の再構築)は、ユーザーが
-  // 「6銘柄まとめて判定」を押した時にだけ行われる。
+  // 「8銘柄まとめて判定」を押した時にだけ行われる。
   if(!dateStr){ clearPurchase(sym); } else { setPurchaseDate(sym,dateStr); }
   // 行全体(renderPF())を再描画すると、pfj/pfm(前回の判定結果表示)が"-"/"未判定"に
   // リセットされ「既存の判定結果が壊れる」ため、ここでは呼ばない。日付欄・削除ボタン・
@@ -363,8 +363,8 @@ function onPurchaseDateChange(i,dateStr){
   const noticeEl=document.getElementById("pfDateNotice"+i);
   if(noticeEl){
     noticeEl.textContent = dateStr
-      ? "購入日を変更しました。反映するには「6銘柄まとめて判定」を押してください。"
-      : "購入日を削除しました。反映するには「6銘柄まとめて判定」を押してください。";
+      ? "購入日を変更しました。反映するには「8銘柄まとめて判定」を押してください。"
+      : "購入日を削除しました。反映するには「8銘柄まとめて判定」を押してください。";
   }
 }
 function openPF(i){const a=getPF(), sym=a[i];if(!sym)return;document.getElementById("symbol").value=sym;document.getElementById("symbol").dispatchEvent(new Event("change"));window.scrollTo({top:0,behavior:"smooth"});}
@@ -619,7 +619,7 @@ async function checkPF(){
   if(btn){btn.disabled=true;btn.textContent="判定中…（APIは1回だけ）";}
   const a=getPF();
   const symbols=[...new Set(a.filter(Boolean))];
-  const rows=[0,1,2,3,4,5];
+  const rows=[0,1,2,3,4,5,6,7];
   try{
     const cache=loadPfCache();
     const now=Date.now();
@@ -636,12 +636,14 @@ async function checkPF(){
     if(need.length){
       // Twelve Data batch uses comma-separated symbols. Do NOT append :EXCHANGE
       // to every symbol; that format can make the batch response unusable.
-      // NASDAQ系とNYSE(BE)を分けて取得。Twelve Dataの環境によっては
+      // 取引所ごとに分けて取得。Twelve Dataの環境によっては
       // 異なる取引所を同一batchに混在させると応答が不安定になるため。
+      // exchangeOf()を使って動的にグループ分けする(以前はBEだけをNYSE扱いする
+      // ハードコードだったため、BE以外のNYSE銘柄を追加すると誤ってNASDAQ扱いされていた)。
       const groups=[];
-      const nasdaqNeed=need.filter(sym=>sym!=="BE");
-      if(nasdaqNeed.length) groups.push({symbols:nasdaqNeed,exchange:"NASDAQ"});
-      if(need.includes("BE")) groups.push({symbols:["BE"],exchange:"NYSE"});
+      const byExchange={};
+      need.forEach(sym=>{ const ex=exchangeOf(sym); (byExchange[ex]=byExchange[ex]||[]).push(sym); });
+      Object.keys(byExchange).forEach(ex=>groups.push({symbols:byExchange[ex],exchange:ex}));
       const responses={};
       for(const g of groups){
         const batch=g.symbols.map(sym=>sym==="AXT"?"AXTI":sym).join(",");
@@ -656,11 +658,10 @@ async function checkPF(){
 
       function findBatchData(sym){
         const apiSymbol=sym==="AXT"?"AXTI":sym;
-        const ex=sym==="BE"?"NYSE":"NASDAQ";
+        const ex=exchangeOf(sym);
         const json=responses[ex];
         // 取引所ごとに1銘柄だけのレスポンスなら values 形式で返る。
-        // BE(NYSE)をNASDAQ側のneed.lengthで判定しないようにする。
-        const groupSize=ex==="NYSE"?need.filter(x=>x==="BE").length:need.filter(x=>x!=="BE").length;
+        const groupSize=need.filter(x=>exchangeOf(x)===ex).length;
         if(json && json.values) return groupSize===1 ? json : null;
         if(!json || typeof json!=="object") return null;
         if(json[apiSymbol]) return json[apiSymbol];
@@ -690,7 +691,7 @@ async function checkPF(){
       const sym=a[i]||"";
       const j=document.getElementById("pfj"+i), m=document.getElementById("pfm"+i);
       if(!sym){j.textContent="銘柄なし";m.textContent="";return;}
-      // 「6銘柄まとめて判定」を押した=反映のタイミングなので、購入日変更の案内文を消す。
+      // 「8銘柄まとめて判定」を押した=反映のタイミングなので、購入日変更の案内文を消す。
       const dateNoticeEl=document.getElementById("pfDateNotice"+i);
       if(dateNoticeEl) dateNoticeEl.textContent="";
       const x=results[sym];
@@ -767,7 +768,7 @@ async function checkPF(){
     });
   }finally{
     window.__pfChecking=false;
-    if(btn){btn.disabled=false;btn.textContent="6銘柄をまとめて判定";}
+    if(btn){btn.disabled=false;btn.textContent="8銘柄をまとめて判定";}
   }
 }
 
