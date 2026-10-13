@@ -181,6 +181,7 @@ button[data-action="detail"] {
 <option value="SNDK">SNDK</option><option value="MU">MU</option><option value="CRDO">CRDO</option>
 <option value="AXT">AXT</option><option value="AEHR">AEHR</option><option value="NBIS">NBIS</option>
 <option value="ALAB">ALAB</option><option value="PLTR">PLTR</option><option value="CRWD">CRWD</option><option value="BE">BE</option>
+<option value="CIEN">CIEN</option><option value="COHR">COHR</option>
 </select>
 
 <button onclick="check()">現在値・RSIを取得して判定</button>
@@ -241,7 +242,7 @@ async function check(){
   const key=getKey();
   if(!key){alert("まずAPIキーを保存してください");return;}
   const symbol=document.getElementById("symbol").value;
-  const exchanges={SNDK:"NASDAQ",MU:"NASDAQ",CRDO:"NASDAQ",AXT:"NASDAQ",AEHR:"NASDAQ",NBIS:"NASDAQ",ALAB:"NASDAQ",PLTR:"NASDAQ",CRWD:"NASDAQ",BE:"NYSE"};
+  const exchanges={SNDK:"NASDAQ",MU:"NASDAQ",CRDO:"NASDAQ",AXT:"NASDAQ",AEHR:"NASDAQ",NBIS:"NASDAQ",ALAB:"NASDAQ",PLTR:"NASDAQ",CRWD:"NASDAQ",BE:"NYSE",CIEN:"NYSE",COHR:"NYSE"};
   const exchange=exchanges[symbol]||"NASDAQ";
 
   const result=document.getElementById("result");
@@ -278,7 +279,7 @@ async function check(){
 
 
 <script>
-const BASE_SYMBOLS=["SNDK","MU","CRDO","AXT","AEHR","NBIS","ALAB","PLTR","CRWD","BE"];
+const BASE_SYMBOLS=["SNDK","MU","CRDO","AXT","AEHR","NBIS","ALAB","PLTR","CRWD","BE","CIEN","COHR"];
 const PF_KEY="takeprofit_pf_v1", CUSTOM_KEY="takeprofit_custom_symbols_v1";
 // 購入日機能(第18段階)のticker単位ストレージ。PFスロット番号には一切紐づけない
 // (スロットを入れ替えても別銘柄の購入日と混ざらないようにするため)。ここはrenderPF()の
@@ -305,7 +306,7 @@ function getCustom(){try{return JSON.parse(localStorage.getItem(CUSTOM_KEY)||"{}
 function getSymbols(){
   const c=getCustom(); return BASE_SYMBOLS.concat(Object.keys(c)).filter((v,i,a)=>a.indexOf(v)===i);
 }
-function exchangeOf(sym){ if(sym==="BE") return "NYSE"; const c=getCustom(); return c[sym]||"NASDAQ"; }
+function exchangeOf(sym){ if(sym==="BE"||sym==="CIEN"||sym==="COHR") return "NYSE"; const c=getCustom(); return c[sym]||"NASDAQ"; }
 function populateAllSymbolSelects(){
   const syms=getSymbols(), main=document.getElementById("symbol"), old=main.value;
   main.innerHTML=syms.map(x=>`<option value="${x}">${x}</option>`).join("");
